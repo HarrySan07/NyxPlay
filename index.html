@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101116" />
+    <meta name="description" content="NYXPLAY — your personal video library." />
+    <title>NYXPLAY — Your Media Universe</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="script.js" defer></script>
+  </head>
+  <body data-theme="dark">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand" href="#" aria-label="NYXPLAY home">
+          <span class="brand-mark">N<span>✦</span></span>
+          <span>NYX<span class="brand-light">PLAY</span></span>
+        </a>
+
+        <div class="sidebar-label">LIBRARY</div>
+        <nav class="main-nav" aria-label="Main navigation">
+          <button type="button" class="nav-item active" data-view="library">
+            <span>▦</span> All videos
+          </button>
+          <button type="button" class="nav-item" data-view="recent">
+            <span>◷</span> Recently watched
+          </button>
+          <button type="button" class="nav-item" data-view="favorites">
+            <span>♡</span> Favorites
+          </button>
+        </nav>
+
+        <div class="sidebar-heading">
+          <span class="sidebar-label">YOUR FOLDERS</span>
+          <span class="folder-symbol">▤</span>
+        </div>
+        <nav
+          id="sidebarFolders"
+          class="folder-nav"
+          aria-label="Video folders"
+        ></nav>
+
+        <div class="sidebar-bottom">
+          <div class="storage-icon">☁</div>
+          <div>
+            <strong>Personal library</strong>
+            <p>Powered by your sources</p>
+          </div>
+          <span class="status-dot" title="Website ready"></span>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <button
+            id="mobileMenu"
+            class="icon-button mobile-menu"
+            type="button"
+            aria-label="Toggle navigation"
+          >
+            ☰
+          </button>
+          <div class="breadcrumb">
+            MY SPACE <span>/</span> <strong id="pageLabel">All videos</strong>
+          </div>
+
+          <div class="topbar-actions">
+            <label class="search-box">
+              <span aria-hidden="true">⌕</span>
+              <input
+                id="searchInput"
+                type="search"
+                placeholder="Search your library..."
+                autocomplete="off"
+                aria-label="Search your video library"
+              />
+              <kbd>/</kbd>
+            </label>
+
+            <button
+              id="themeButton"
+              class="secondary-button theme-button"
+              type="button"
+              title="Switch to light mode"
+              aria-label="Switch to light mode"
+            >
+              <span class="theme-icon" aria-hidden="true">☀</span>
+              <span id="themeButtonLabel">Light mode</span>
+            </button>
+
+            <button id="addVideoButton" class="primary-button" type="button">
+              <span>＋</span> Add video
+            </button>
+          </div>
+        </header>
+
+        <section class="hero">
+          <div class="hero-copy">
+            <div class="eyebrow">
+              <span class="live-dot"></span> YOUR PERSONAL MEDIA HUB
+            </div>
+            <h1>Your world.<br /><span>Your watchlist.</span></h1>
+            <p>
+              Your videos, your folders, your rules. Bring your favorite media
+              sources into one simple library.
+            </p>
+            <div class="hero-actions">
+              <button
+                id="heroActionButton"
+                class="primary-button hero-button"
+                type="button"
+              >
+                <span>＋</span> Add your first video
+              </button>
+              <span class="hero-note"
+                >A little corner of the internet, just for you.</span
+              >
+            </div>
+          </div>
+          <div class="hero-art" aria-hidden="true">
+            <div class="orbit orbit-one"></div>
+            <div class="orbit orbit-two"></div>
+            <div class="art-glow"></div>
+            <div class="play-emblem">▶</div>
+            <div class="art-tag tag-top">YOUR MEDIA</div>
+            <div class="art-tag tag-bottom">N° 001 — INFINITE PLAY</div>
+          </div>
+          <div class="hero-grain"></div>
+        </section>
+
+        <section class="stats-row" aria-label="Library statistics">
+          <div class="stat-card">
+            <div class="stat-icon purple">▤</div>
+            <div>
+              <span class="stat-value" id="videoCount">0</span
+              ><span class="stat-label">VIDEOS IN LIBRARY</span>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon pink">♡</div>
+            <div>
+              <span class="stat-value" id="favoriteCount">0</span
+              ><span class="stat-label">FAVORITES</span>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon blue">◷</div>
+            <div>
+              <span class="stat-value" id="recentCount">0</span
+              ><span class="stat-label">WATCHED VIDEOS</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="library-section">
+          <div class="section-top">
+            <div>
+              <div class="eyebrow section-eyebrow">
+                PICK UP WHERE YOU LEFT OFF
+              </div>
+              <h2 id="sectionTitle">
+                Explore your library<span class="heading-period">.</span>
+              </h2>
+            </div>
+            <span id="resultCount" class="result-count">0 ITEMS</span>
+          </div>
+          <div
+            id="categoryFilters"
+            class="category-filters"
+            aria-label="Filter by folder"
+          ></div>
+          <div id="videoGrid" class="video-grid"></div>
+          <div id="emptyState" class="empty-state">
+            <div class="empty-icon">▶</div>
+            <h3 id="emptyTitle">Your library starts here.</h3>
+            <p id="emptyMessage">
+              Add a Google Drive video to create your personal collection.
+            </p>
+            <button id="emptyAddButton" class="primary-button" type="button">
+              ＋ Add a video
+            </button>
+          </div>
+        </section>
+
+        <footer class="footer">
+          <span><span class="footer-mark">N✦</span> NYXPLAY</span
+          ><span>YOUR MEDIA. YOUR SPACE.</span>
+        </footer>
+      </main>
+    </div>
+
+    <dialog id="addDialog" class="app-dialog">
+      <form id="addVideoForm" class="dialog-content">
+        <div class="dialog-header">
+          <div>
+            <div class="eyebrow">EXPAND YOUR COLLECTION</div>
+            <h2>Add a video<span class="heading-period">.</span></h2>
+          </div>
+          <button
+            type="button"
+            class="icon-button close-button"
+            data-close-dialog="addDialog"
+            aria-label="Close add video dialog"
+          >
+            ✕
+          </button>
+        </div>
+        <p class="dialog-description">
+          Add a Google Drive video link and organize it into one of your
+          folders.
+        </p>
+
+        <label class="field-label" for="videoTitle">Video title</label>
+        <input
+          class="form-input"
+          id="videoTitle"
+          name="title"
+          type="text"
+          maxlength="120"
+          placeholder="e.g. My favorite episode"
+          required
+        />
+
+        <label class="field-label" for="driveUrl"
+          >Google Drive sharing link</label
+        >
+        <input
+          class="form-input"
+          id="driveUrl"
+          name="driveUrl"
+          type="url"
+          placeholder="https://drive.google.com/file/d/..."
+          required
+        />
+        <p class="field-hint">
+          Use a Google Drive file link, not a folder link.
+        </p>
+
+        <label class="field-label" for="videoCategory">Choose a folder</label>
+        <select class="form-input" id="videoCategory" name="category">
+          <option>Movies</option>
+          <option>Series</option>
+          <option>Cartoons</option>
+          <option>Anime</option>
+          <option selected>Other</option>
+        </select>
+        <p id="formError" class="form-error" role="alert" hidden></p>
+
+        <div class="dialog-actions">
+          <button
+            type="button"
+            class="secondary-button"
+            data-close-dialog="addDialog"
+          >
+            Cancel
+          </button>
+          <button type="submit" class="primary-button">
+            Save to library ↗
+          </button>
+        </div>
+        <p class="privacy-note">
+          Your library list is saved in this browser only.
+        </p>
+      </form>
+    </dialog>
+
+    <dialog id="playerDialog" class="player-dialog">
+      <div class="player-content">
+        <div class="player-header">
+          <div class="player-heading">
+            <span class="player-badge">NOW PLAYING</span>
+            <h2 id="playerTitle">Video title</h2>
+            <p id="playerCategory">Google Drive</p>
+          </div>
+          <button
+            id="closePlayerButton"
+            class="icon-button close-button"
+            type="button"
+            aria-label="Close video player"
+          >
+            ✕
+          </button>
+        </div>
+        <div class="video-frame-wrap">
+          <iframe
+            id="videoFrame"
+            title="Google Drive video player"
+            src="about:blank"
+            allow="autoplay; encrypted-media; picture-in-picture"
+            allowfullscreen
+            referrerpolicy="strict-origin-when-cross-origin"
+          ></iframe>
+        </div>
+        <div class="player-controls">
+          <div class="player-notice">
+            <span class="status-dot"></span> Playback provided by Google Drive
+          </div>
+          <div class="player-buttons">
+            <button id="openDriveButton" class="secondary-button" type="button">
+              Open in Drive ↗
+            </button>
+            <button id="nextVideoButton" class="primary-button" type="button">
+              Next video →
+            </button>
+          </div>
+        </div>
+        <p class="player-help">
+          If playback is blocked, check the video's Drive sharing permissions
+          and make sure you are signed into an authorized Google account.
+        </p>
+      </div>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>
