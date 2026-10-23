@@ -164,6 +164,48 @@
             </div>
             <span id="resultCount" class="result-count">0 ITEMS</span>
           </div>
+          <div class="library-toolbar" aria-label="Library tools">
+            <div class="library-tools-left">
+              <button
+                id="manageFoldersButton"
+                class="secondary-button tool-button"
+                type="button"
+              >
+                ▤ Manage folders
+              </button>
+              <button
+                id="exportLibraryButton"
+                class="secondary-button tool-button"
+                type="button"
+              >
+                ↓ Export backup
+              </button>
+              <button
+                id="importLibraryButton"
+                class="secondary-button tool-button"
+                type="button"
+              >
+                ↑ Import backup
+              </button>
+              <input
+                id="importFileInput"
+                type="file"
+                accept=".json,application/json"
+                hidden
+              />
+            </div>
+            <label class="sort-control" for="sortSelect">
+              <span>Sort</span>
+              <select id="sortSelect" class="form-input sort-select">
+                <option value="smart">Default order</option>
+                <option value="title-asc">Title A–Z</option>
+                <option value="title-desc">Title Z–A</option>
+                <option value="added-newest">Recently added</option>
+                <option value="added-oldest">Oldest added</option>
+                <option value="watched-newest">Recently watched</option>
+              </select>
+            </label>
+          </div>
           <div
             id="categoryFilters"
             class="category-filters"
@@ -262,6 +304,134 @@
           Your library list is saved in this browser only.
         </p>
       </form>
+    </dialog>
+
+    <dialog id="editDialog" class="app-dialog">
+      <form id="editVideoForm" class="dialog-content">
+        <div class="dialog-header">
+          <div>
+            <div class="eyebrow">UPDATE YOUR COLLECTION</div>
+            <h2>Edit video<span class="heading-period">.</span></h2>
+          </div>
+          <button
+            type="button"
+            class="icon-button close-button"
+            data-close-dialog="editDialog"
+            aria-label="Close edit video dialog"
+          >
+            ✕
+          </button>
+        </div>
+        <p class="dialog-description">
+          Change the title, Google Drive link, or folder for this video.
+        </p>
+        <input id="editVideoId" type="hidden" />
+        <label class="field-label" for="editVideoTitle">Video title</label>
+        <input
+          class="form-input"
+          id="editVideoTitle"
+          type="text"
+          maxlength="120"
+          required
+        />
+        <label class="field-label" for="editDriveUrl"
+          >Google Drive sharing link</label
+        >
+        <input class="form-input" id="editDriveUrl" type="url" required />
+        <p class="field-hint">Only Google Drive file links are accepted.</p>
+        <label class="field-label" for="editVideoCategory">Folder</label>
+        <select class="form-input" id="editVideoCategory"></select>
+        <p id="editFormError" class="form-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button
+            type="button"
+            class="secondary-button"
+            data-close-dialog="editDialog"
+          >
+            Cancel
+          </button>
+          <button type="submit" class="primary-button">Save changes ↗</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="deleteDialog" class="app-dialog">
+      <div class="dialog-content">
+        <div class="dialog-header">
+          <div>
+            <div class="eyebrow">REMOVE FROM YOUR LIBRARY</div>
+            <h2>Delete video<span class="heading-period">.</span></h2>
+          </div>
+          <button
+            type="button"
+            class="icon-button close-button"
+            data-close-dialog="deleteDialog"
+            aria-label="Close delete confirmation"
+          >
+            ✕
+          </button>
+        </div>
+        <p id="deleteMessage" class="dialog-description">
+          Remove this video from your NYXPLAY library? The original file in
+          Google Drive will not be deleted.
+        </p>
+        <div class="dialog-actions">
+          <button
+            id="cancelDeleteButton"
+            type="button"
+            class="secondary-button"
+          >
+            Cancel
+          </button>
+          <button id="confirmDeleteButton" type="button" class="danger-button">
+            Delete from library
+          </button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="folderDialog" class="app-dialog folder-dialog">
+      <div class="dialog-content">
+        <div class="dialog-header">
+          <div>
+            <div class="eyebrow">ORGANIZE YOUR MEDIA</div>
+            <h2>Manage folders<span class="heading-period">.</span></h2>
+          </div>
+          <button
+            type="button"
+            class="icon-button close-button"
+            data-close-dialog="folderDialog"
+            aria-label="Close folder manager"
+          >
+            ✕
+          </button>
+        </div>
+        <p class="dialog-description">
+          Create your own folders or rename them. Deleting a custom folder moves
+          its videos to Other; your Google Drive files are never deleted.
+        </p>
+        <form id="createFolderForm" class="create-folder-form">
+          <label class="field-label" for="newFolderName">New folder name</label>
+          <div class="inline-form-row">
+            <input
+              class="form-input"
+              id="newFolderName"
+              type="text"
+              maxlength="30"
+              placeholder="e.g. Documentaries"
+              required
+            />
+            <button class="primary-button" type="submit">＋ Create</button>
+          </div>
+          <p id="folderFormError" class="form-error" role="alert" hidden></p>
+        </form>
+        <div class="folder-list-heading">
+          <span class="field-label">YOUR FOLDERS</span
+          ><span id="folderCountLabel" class="result-count"></span>
+        </div>
+        <div id="folderManagerList" class="folder-manager-list"></div>
+        <p class="privacy-note">Folder changes are saved in this browser.</p>
+      </div>
     </dialog>
 
     <dialog id="playerDialog" class="player-dialog">
