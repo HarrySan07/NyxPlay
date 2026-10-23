@@ -1,25 +1,13 @@
 "use strict";
 
-/* =========================================================
-   NYXPLAY — PERSONAL MEDIA LIBRARY
-   Features:
-   - Dark / Light themes
-   - Google Drive embedded playback
-   - Search, folders, favorites and recently watched
-   - Edit and delete videos
-   - Create, rename and delete custom folders
-   - Export and import JSON backups
-   - Sort videos
-   ========================================================= */
-
 const STORAGE_KEY = "nyxplay_library_v1";
 const THEME_KEY = "nyxplay_theme_v1";
 const CATEGORIES_KEY = "nyxplay_categories_v1";
-
 const THEMES = ["dark", "light"];
 const BUILTIN_CATEGORIES = ["Movies", "Series", "Cartoons", "Anime", "Other"];
-
 const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
+const MAX_DRIVE_SCAN_FOLDERS = 500;
+const MAX_DRIVE_SCAN_VIDEOS = 3000;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -72,6 +60,21 @@ const elements = {
   importLibraryButton: $("#importLibraryButton"),
   importFileInput: $("#importFileInput"),
 
+  importDriveFolderButton: $("#importDriveFolderButton"),
+  folderImportDialog: $("#folderImportDialog"),
+  driveFolderUrl: $("#driveFolderUrl"),
+  driveApiKey: $("#driveApiKey"),
+  folderImportCategory: $("#folderImportCategory"),
+  createMatchingFolder: $("#createMatchingFolder"),
+  scanNestedFolders: $("#scanNestedFolders"),
+  scanDriveFolderButton: $("#scanDriveFolderButton"),
+  folderImportStatus: $("#folderImportStatus"),
+  folderImportPreview: $("#folderImportPreview"),
+  folderImportCount: $("#folderImportCount"),
+  folderImportList: $("#folderImportList"),
+  importScannedVideosButton: $("#importScannedVideosButton"),
+  cancelFolderImportButton: $("#cancelFolderImportButton"),
+
   playerDialog: $("#playerDialog"),
   playerTitle: $("#playerTitle"),
   playerCategory: $("#playerCategory"),
@@ -86,13 +89,14 @@ const elements = {
 
 let categories = loadCategories();
 let videos = loadLibrary();
-
 let currentView = "library";
 let currentCategory = "All";
 let currentQueue = [];
 let currentVideoId = null;
 let pendingDeleteId = null;
 let toastTimeout = null;
+let folderScanResults = null;
+let folderScanBusy = false;
 
 /* =========================================================
    STORAGE AND DATA VALIDATION
@@ -126,14 +130,12 @@ function loadCategories() {
   try {
     const stored = JSON.parse(localStorage.getItem(CATEGORIES_KEY) || "[]");
 
-    if (Array.isArray(stored)) {
-      stored.forEach(addUnique);
-    }
+    if (Array.isArray(stored)) stored.forEach(addUnique);
   } catch (error) {
     console.warn("Could not read custom folders:", error);
   }
 
-  // Preserve existing custom categories from the old library.
+  // Preserve custom categories already present in the existing library.
   try {
     const oldVideos = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
 
@@ -141,7 +143,7 @@ function loadCategories() {
       oldVideos.forEach((video) => addUnique(video?.category));
     }
   } catch {
-    // Invalid library data is handled separately.
+    // Corrupt library data is handled separately.
   }
 
   return result;
@@ -179,6 +181,8 @@ function loadLibrary() {
       .map((item) => ({
         id: item.id,
         fileId: item.fileId,
+        resourceKey:
+          typeof item.resourceKey === "string" ? item.resourceKey : null,
         title: item.title.trim(),
         category: item.category,
         favorite: Boolean(item.favorite),
@@ -196,7 +200,6 @@ function loadLibrary() {
 function saveLibrary() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(videos));
-
     return true;
   } catch (error) {
     console.error("Could not save the NYXPLAY library:", error);
@@ -231,9 +234,7 @@ function extractDriveFileId(rawUrl) {
 
     const id = filePath?.[1] || documentPath?.[1] || url.searchParams.get("id");
 
-    if (!id || !/^[a-zA-Z0-9_-]+$/.test(id)) {
-      return null;
-    }
+    if (!id || !/^[a-zA-Z0-9_-]+$/.test(id)) return null;
 
     return id;
   } catch {
@@ -241,14 +242,58 @@ function extractDriveFileId(rawUrl) {
   }
 }
 
-function driveViewUrl(fileId) {
-  return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`;
+function extractDriveFolderId(rawUrl) {
+  try {
+    const url = new URL(rawUrl.trim());
+
+    if (url.protocol !== "https:" || url.hostname !== "drive.google.com") {
+      return null;
+    }
+
+    const match = url.pathname.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+
+    return match?.[1] || null;
+  } catch {
+    return null;
+  }
 }
 
-function drivePreviewUrl(fileId) {
-  return `https://drive.google.com/file/d/${encodeURIComponent(
-    fileId,
-  )}/preview`;
+function driveViewUrl(fileId, resourceKey = null) {
+  const url = new URL(
+    `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`,
+  );
+
+  if (resourceKey) {
+    url.searchParams.set("resourcekey", resourceKey);
+  }
+
+  return url.toString();
+}
+
+function drivePreviewUrl(fileId, resourceKey = null) {
+  const url = new URL(
+    `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`,
+  );
+
+  if (resourceKey) {
+    url.searchParams.set("resourcekey", resourceKey);
+  }
+
+  return url.toString();
+}
+
+function driveResourceKey(rawUrl) {
+  try {
+    const url = new URL(rawUrl.trim());
+
+    return (
+      url.searchParams.get("resourcekey") ||
+      url.searchParams.get("resourceKey") ||
+      null
+    );
+  } catch {
+    return null;
+  }
 }
 
 /* =========================================================
@@ -275,27 +320,20 @@ function getSavedTheme() {
 }
 
 function applyTheme(theme, announce = false) {
-  if (!THEMES.includes(theme)) {
-    theme = "dark";
-  }
+  if (!THEMES.includes(theme)) theme = "dark";
 
   document.body.dataset.theme = theme;
 
   const isDark = theme === "dark";
   const nextModeLabel = isDark ? "Light mode" : "Dark mode";
   const icon = isDark ? "☀" : "☾";
-
-  const iconElement =
-    elements.themeButton?.querySelector(".theme-icon") ||
-    elements.themeButton?.querySelector("span:first-child");
+  const iconElement = elements.themeButton?.querySelector(".theme-icon");
 
   if (elements.themeButtonLabel) {
     elements.themeButtonLabel.textContent = nextModeLabel;
   }
 
-  if (iconElement) {
-    iconElement.textContent = icon;
-  }
+  if (iconElement) iconElement.textContent = icon;
 
   if (elements.themeButton) {
     elements.themeButton.title = `Switch to ${nextModeLabel.toLowerCase()}`;
@@ -334,9 +372,7 @@ function cycleTheme() {
    ========================================================= */
 
 function closeDialog(dialog) {
-  if (dialog?.open) {
-    dialog.close();
-  }
+  if (dialog?.open) dialog.close();
 }
 
 function renderCategoryOptions(selectElement, selectedValue = "Other") {
@@ -346,10 +382,8 @@ function renderCategoryOptions(selectElement, selectedValue = "Other") {
 
   categories.forEach((category) => {
     const option = document.createElement("option");
-
     option.value = category;
     option.textContent = category;
-
     selectElement.append(option);
   });
 
@@ -466,8 +500,8 @@ function renderSidebarFolders() {
 
   categories.forEach((category, index) => {
     const button = document.createElement("button");
-
     button.type = "button";
+
     button.className = `folder-item${
       currentCategory === category ? " active" : ""
     }`;
@@ -498,8 +532,8 @@ function renderCategoryFilters() {
 
   ["All", ...categories].forEach((category) => {
     const button = document.createElement("button");
-
     button.type = "button";
+
     button.className = `filter-button${
       currentCategory === category ? " active" : ""
     }`;
@@ -512,18 +546,16 @@ function renderCategoryFilters() {
 }
 
 /* =========================================================
-   VIDEO CARDS AND CARD ACTIONS
+   VIDEO CARDS
    ========================================================= */
 
 function makeCardAction(label, text, className, handler) {
   const button = document.createElement("button");
-
   button.type = "button";
   button.className = className;
   button.textContent = text;
   button.title = label;
   button.setAttribute("aria-label", label);
-
   button.addEventListener("click", handler);
 
   return button;
@@ -534,14 +566,11 @@ function createVideoCard(video) {
   article.className = "video-card";
 
   const poster = document.createElement("button");
-
   poster.type = "button";
   poster.className = "poster";
   poster.setAttribute("aria-label", `Play ${video.title}`);
 
-  poster.addEventListener("click", () => {
-    openPlayer(video.id);
-  });
+  poster.addEventListener("click", () => openPlayer(video.id));
 
   const posterCategory = document.createElement("span");
   posterCategory.className = "poster-category";
@@ -693,6 +722,13 @@ function render() {
     elements.editVideoCategory,
     elements.editVideoCategory.value || "Other",
   );
+
+  renderCategoryOptions(
+    elements.folderImportCategory,
+    elements.folderImportCategory.value || "Other",
+  );
+
+  updateFolderImportDestinationControl();
 }
 
 function setCategory(category) {
@@ -710,7 +746,6 @@ function setCategory(category) {
 
 function toggleFavorite(id) {
   const video = videos.find((item) => item.id === id);
-
   if (!video) return;
 
   video.favorite = !video.favorite;
@@ -719,6 +754,80 @@ function toggleFavorite(id) {
   render();
 
   showToast(video.favorite ? "Added to favorites ♥" : "Removed from favorites");
+}
+
+/* =========================================================
+   VIDEO PLAYER
+   ========================================================= */
+
+function openPlayer(id, keepQueue = false) {
+  const video = videos.find((item) => item.id === id);
+  if (!video) return;
+
+  if (!keepQueue) {
+    currentQueue = getVisibleVideos().map((item) => item.id);
+
+    if (!currentQueue.includes(id)) {
+      currentQueue.unshift(id);
+    }
+  }
+
+  currentVideoId = id;
+  video.lastWatched = Date.now();
+  saveLibrary();
+
+  elements.playerTitle.textContent = video.title;
+
+  elements.playerCategory.textContent = `Folder: ${video.category} · Google Drive`;
+
+  elements.videoFrame.src = drivePreviewUrl(video.fileId, video.resourceKey);
+
+  elements.openDriveButton.onclick = () => {
+    window.open(
+      driveViewUrl(video.fileId, video.resourceKey),
+      "_blank",
+      "noopener,noreferrer",
+    );
+  };
+
+  const currentIndex = currentQueue.indexOf(id);
+  const hasNext = currentIndex >= 0 && currentIndex < currentQueue.length - 1;
+
+  elements.nextVideoButton.disabled = !hasNext;
+
+  elements.nextVideoButton.textContent = hasNext
+    ? "Next video →"
+    : "End of list";
+
+  if (!elements.playerDialog.open) {
+    elements.playerDialog.showModal();
+  }
+
+  render();
+}
+
+function playNext() {
+  const currentIndex = currentQueue.indexOf(currentVideoId);
+
+  if (currentIndex < 0 || currentIndex >= currentQueue.length - 1) {
+    showToast("You've reached the end of this list.");
+    return;
+  }
+
+  const nextId = currentQueue[currentIndex + 1];
+
+  if (!videos.some((video) => video.id === nextId)) {
+    showToast("The next video is no longer in your library.");
+    return;
+  }
+
+  openPlayer(nextId, true);
+}
+
+function closePlayer() {
+  elements.videoFrame.src = "about:blank";
+  closeDialog(elements.playerDialog);
+  currentVideoId = null;
 }
 
 /* =========================================================
@@ -734,7 +843,7 @@ function openEditDialog(id) {
 
   elements.editVideoId.value = video.id;
   elements.editVideoTitle.value = video.title;
-  elements.editDriveUrl.value = driveViewUrl(video.fileId);
+  elements.editDriveUrl.value = driveViewUrl(video.fileId, video.resourceKey);
 
   renderCategoryOptions(elements.editVideoCategory, video.category);
 
@@ -742,9 +851,7 @@ function openEditDialog(id) {
     elements.editDialog.showModal();
   }
 
-  setTimeout(() => {
-    elements.editVideoTitle.focus();
-  }, 50);
+  setTimeout(() => elements.editVideoTitle.focus(), 50);
 }
 
 function handleEditVideo(event) {
@@ -752,7 +859,6 @@ function handleEditVideo(event) {
 
   const id = elements.editVideoId.value;
   const video = videos.find((item) => item.id === id);
-
   if (!video) return;
 
   const title = elements.editVideoTitle.value.trim();
@@ -796,6 +902,7 @@ function handleEditVideo(event) {
 
   video.title = title;
   video.fileId = fileId;
+  video.resourceKey = driveResourceKey(elements.editDriveUrl.value);
   video.category = category;
 
   if (!saveLibrary()) {
@@ -811,14 +918,14 @@ function handleEditVideo(event) {
 
     elements.playerCategory.textContent = `Folder: ${video.category} · Google Drive`;
 
-    elements.videoFrame.src = drivePreviewUrl(video.fileId);
+    elements.videoFrame.src = drivePreviewUrl(video.fileId, video.resourceKey);
   }
 
   showToast("Video details updated.");
 }
 
 /* =========================================================
-   DELETE VIDEO — ORIGINAL DRIVE FILE IS NOT DELETED
+   DELETE VIDEO
    ========================================================= */
 
 function requestDeleteVideo(id) {
@@ -881,9 +988,7 @@ function openFolderDialog() {
     elements.folderDialog.showModal();
   }
 
-  setTimeout(() => {
-    elements.newFolderName.focus();
-  }, 50);
+  setTimeout(() => elements.newFolderName.focus(), 50);
 }
 
 function renderFolderManager() {
@@ -909,9 +1014,9 @@ function renderFolderManager() {
     const count = document.createElement("span");
     count.className = "folder-manager-count";
 
-    count.textContent = String(
-      videos.filter((video) => video.category === category).length,
-    );
+    count.textContent = videos.filter(
+      (video) => video.category === category,
+    ).length;
 
     nameWrap.append(dot, name, count);
     row.append(nameWrap);
@@ -929,20 +1034,14 @@ function renderFolderManager() {
       renameButton.type = "button";
       renameButton.className = "secondary-button folder-action-button";
       renameButton.textContent = "Rename";
-
-      renameButton.addEventListener("click", () => {
-        renameFolder(category);
-      });
+      renameButton.addEventListener("click", () => renameFolder(category));
 
       const deleteButton = document.createElement("button");
       deleteButton.type = "button";
       deleteButton.className =
         "secondary-button folder-action-button delete-action";
       deleteButton.textContent = "Delete";
-
-      deleteButton.addEventListener("click", () => {
-        deleteFolder(category);
-      });
+      deleteButton.addEventListener("click", () => deleteFolder(category));
 
       actions.append(renameButton, deleteButton);
       row.append(actions);
@@ -1037,7 +1136,6 @@ function renameFolder(oldName) {
 
     saveCategories();
     saveLibrary();
-
     render();
     renderFolderManager();
     return;
@@ -1089,7 +1187,6 @@ function deleteFolder(category) {
 
     saveCategories();
     saveLibrary();
-
     render();
     renderFolderManager();
     return;
@@ -1132,7 +1229,6 @@ function exportLibrary() {
 
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-
   const date = new Date().toISOString().slice(0, 10);
 
   link.href = url;
@@ -1148,9 +1244,7 @@ function exportLibrary() {
 }
 
 function validateImportedVideo(item, availableCategories) {
-  if (!item || typeof item !== "object") {
-    return null;
-  }
+  if (!item || typeof item !== "object") return null;
 
   const title = typeof item.title === "string" ? item.title.trim() : "";
 
@@ -1166,14 +1260,12 @@ function validateImportedVideo(item, availableCategories) {
 
   return {
     id: typeof item.id === "string" && item.id ? item.id : makeId(),
-
     fileId,
+    resourceKey: typeof item.resourceKey === "string" ? item.resourceKey : null,
     title,
     category,
     favorite: Boolean(item.favorite),
-
     addedAt: Number.isFinite(item.addedAt) ? item.addedAt : Date.now(),
-
     lastWatched: Number.isFinite(item.lastWatched) ? item.lastWatched : null,
   };
 }
@@ -1219,10 +1311,7 @@ async function importLibraryFile(file) {
     const existingFileIds = new Set(videos.map((video) => video.fileId));
 
     const newVideos = candidateVideos.filter((video) => {
-      if (existingFileIds.has(video.fileId)) {
-        return false;
-      }
-
+      if (existingFileIds.has(video.fileId)) return false;
       existingFileIds.add(video.fileId);
       return true;
     });
@@ -1259,77 +1348,521 @@ async function importLibraryFile(file) {
 }
 
 /* =========================================================
-   VIDEO PLAYER
+   GOOGLE DRIVE FOLDER IMPORT
    ========================================================= */
 
-function openPlayer(id, keepQueue = false) {
-  const video = videos.find((item) => item.id === id);
-  if (!video) return;
+function setFolderImportStatus(message, state = "info") {
+  elements.folderImportStatus.textContent = message;
+  elements.folderImportStatus.dataset.state = state;
+}
 
-  if (!keepQueue) {
-    currentQueue = getVisibleVideos().map((item) => item.id);
+function resetFolderImportScan() {
+  folderScanResults = null;
+  elements.folderImportPreview.hidden = true;
+  elements.folderImportList.replaceChildren();
+  elements.folderImportCount.textContent = "";
+  elements.importScannedVideosButton.disabled = true;
+  elements.importScannedVideosButton.textContent = "Import videos";
+}
 
-    if (!currentQueue.includes(id)) {
-      currentQueue.unshift(id);
+function updateFolderImportDestinationControl() {
+  if (!elements.createMatchingFolder || !elements.folderImportCategory) {
+    return;
+  }
+
+  elements.folderImportCategory.disabled =
+    elements.createMatchingFolder.checked;
+}
+
+function openFolderImportDialog() {
+  resetFolderImportScan();
+
+  renderCategoryOptions(
+    elements.folderImportCategory,
+    elements.folderImportCategory.value || "Other",
+  );
+
+  updateFolderImportDestinationControl();
+
+  setFolderImportStatus(
+    "Paste the public folder link and your restricted API key, then scan.",
+    "info",
+  );
+
+  if (!elements.folderImportDialog.open) {
+    elements.folderImportDialog.showModal();
+  }
+}
+
+function isLikelyVideoFile(file) {
+  const mimeType = String(file.mimeType || "").toLowerCase();
+
+  if (mimeType.startsWith("video/")) return true;
+
+  return /\.(mp4|m4v|mkv|webm|mov|avi|mpeg|mpg|3gp|ogv|wmv|flv|ts|mts|m2ts)$/i.test(
+    file.name || "",
+  );
+}
+
+function cleanImportedTitle(fileName) {
+  return (
+    String(fileName || "Untitled video")
+      .replace(/\.[^.]+$/, "")
+      .trim() || "Untitled video"
+  );
+}
+
+function sanitizeImportedFolderName(value) {
+  let name = String(value || "Imported Drive Folder")
+    .replace(/[<>/\\\u0000-\u001f]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!name) name = "Imported Drive Folder";
+  if (name.length > 30) name = name.slice(0, 30).trim();
+
+  return name || "Imported Drive Folder";
+}
+
+async function driveApiRequest(url) {
+  const response = await fetch(url, { method: "GET" });
+
+  let payload;
+
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok || payload?.error) {
+    const apiMessage =
+      payload?.error?.message || response.statusText || "Unknown API error";
+
+    const lower = apiMessage.toLowerCase();
+
+    if (
+      response.status === 403 &&
+      (lower.includes("referer") || lower.includes("referrer"))
+    ) {
+      throw new Error(
+        "Google rejected the key's website restriction. Allow https://harrysan07.github.io/* in the key settings and retry on the live website.",
+      );
     }
+
+    if (
+      response.status === 403 &&
+      (lower.includes("api has not been used") ||
+        lower.includes("disabled") ||
+        lower.includes("service_disabled"))
+    ) {
+      throw new Error(
+        "Google Drive API is not enabled for this Cloud project yet. Enable it under APIs & Services → Library, then retry.",
+      );
+    }
+
+    if (
+      response.status === 403 &&
+      (lower.includes("quota") || lower.includes("rate limit"))
+    ) {
+      throw new Error(
+        "Google Drive API quota or rate limit reached. Wait a little and try again.",
+      );
+    }
+
+    if (response.status === 404) {
+      throw new Error(
+        "Google could not find that folder. Check the URL and ensure the target folder itself is shared as Anyone with the link — Viewer.",
+      );
+    }
+
+    if (response.status === 401 || lower.includes("api key not valid")) {
+      throw new Error(
+        "The API key was rejected. Check it, confirm Google Drive API is enabled, and verify the allowed website matches this GitHub Pages site.",
+      );
+    }
+
+    if (response.status === 403) {
+      throw new Error(
+        `Google denied access to this folder. Confirm the target parent folder is shared as Anyone with the link — Viewer. Details: ${apiMessage}`,
+      );
+    }
+
+    throw new Error(
+      `Google Drive API error (${response.status}): ${apiMessage}`,
+    );
   }
 
-  currentVideoId = id;
-  video.lastWatched = Date.now();
+  return payload;
+}
 
-  saveLibrary();
+async function getPublicFolderInfo(folderId, apiKey) {
+  const url = new URL(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}`,
+  );
 
-  elements.playerTitle.textContent = video.title;
+  url.searchParams.set("key", apiKey);
+  url.searchParams.set("fields", "id,name,mimeType,resourceKey");
+  url.searchParams.set("supportsAllDrives", "true");
 
-  elements.playerCategory.textContent = `Folder: ${video.category} · Google Drive`;
+  return driveApiRequest(url.toString());
+}
 
-  elements.videoFrame.src = drivePreviewUrl(video.fileId);
+async function listPublicFolderChildren(folderId, apiKey) {
+  const allFiles = [];
+  let pageToken = null;
 
-  elements.openDriveButton.onclick = () => {
-    window.open(driveViewUrl(video.fileId), "_blank", "noopener,noreferrer");
+  do {
+    const url = new URL("https://www.googleapis.com/drive/v3/files");
+
+    url.searchParams.set("key", apiKey);
+    url.searchParams.set("q", `'${folderId}' in parents and trashed = false`);
+    url.searchParams.set("pageSize", "1000");
+    url.searchParams.set("orderBy", "name_natural");
+
+    url.searchParams.set(
+      "fields",
+      "nextPageToken,files(id,name,mimeType,resourceKey,shortcutDetails(targetId,targetMimeType))",
+    );
+
+    url.searchParams.set("supportsAllDrives", "true");
+    url.searchParams.set("includeItemsFromAllDrives", "true");
+
+    if (pageToken) {
+      url.searchParams.set("pageToken", pageToken);
+    }
+
+    const data = await driveApiRequest(url.toString());
+
+    if (Array.isArray(data.files)) {
+      allFiles.push(...data.files);
+    }
+
+    pageToken = data.nextPageToken || null;
+  } while (pageToken);
+
+  return allFiles;
+}
+
+async function scanPublicDriveFolder(rootFolderId, apiKey, includeSubfolders) {
+  const rootInfo = await getPublicFolderInfo(rootFolderId, apiKey);
+
+  if (rootInfo.mimeType !== "application/vnd.google-apps.folder") {
+    throw new Error(
+      "This link does not point to a Google Drive folder. Use a link containing /folders/ and the folder ID.",
+    );
+  }
+
+  const queue = [
+    {
+      id: rootFolderId,
+      path: rootInfo.name || "",
+    },
+  ];
+
+  const visited = new Set();
+  const videosFound = [];
+
+  let childFolderCount = 0;
+  let skippedShortcuts = 0;
+  let truncated = false;
+
+  while (queue.length) {
+    if (visited.size >= MAX_DRIVE_SCAN_FOLDERS) {
+      truncated = true;
+      break;
+    }
+
+    const current = queue.shift();
+
+    if (visited.has(current.id)) continue;
+    visited.add(current.id);
+
+    setFolderImportStatus(
+      `Scanning “${current.path || rootInfo.name}”… ${videosFound.length} video(s) found in ${visited.size} folder(s).`,
+      "working",
+    );
+
+    const children = await listPublicFolderChildren(current.id, apiKey);
+
+    for (const item of children) {
+      if (
+        !item ||
+        typeof item.id !== "string" ||
+        typeof item.name !== "string"
+      ) {
+        continue;
+      }
+
+      if (item.mimeType === "application/vnd.google-apps.folder") {
+        childFolderCount += 1;
+
+        if (includeSubfolders) {
+          queue.push({
+            id: item.id,
+            path: current.path ? `${current.path} / ${item.name}` : item.name,
+          });
+        }
+
+        continue;
+      }
+
+      // Shortcuts can point outside the selected folder.
+      if (item.mimeType === "application/vnd.google-apps.shortcut") {
+        skippedShortcuts += 1;
+        continue;
+      }
+
+      if (isLikelyVideoFile(item)) {
+        videosFound.push({
+          fileId: item.id,
+          resourceKey: item.resourceKey || null,
+          name: item.name,
+          mimeType: item.mimeType || "",
+          folderPath: current.path || rootInfo.name || "",
+        });
+
+        if (videosFound.length >= MAX_DRIVE_SCAN_VIDEOS) {
+          truncated = true;
+          break;
+        }
+      }
+    }
+
+    if (truncated) break;
+  }
+
+  return {
+    rootFolderId,
+    rootFolderName: rootInfo.name || "Imported Drive Folder",
+    rootResourceKey: rootInfo.resourceKey || null,
+    videos: videosFound,
+    scannedFolders: visited.size,
+    childFolderCount,
+    skippedShortcuts,
+    truncated,
+    includeSubfolders,
   };
+}
 
-  const currentIndex = currentQueue.indexOf(id);
+function showFolderScanPreview(result) {
+  elements.folderImportList.replaceChildren();
 
-  const hasNext = currentIndex >= 0 && currentIndex < currentQueue.length - 1;
+  const candidates = result.videos;
 
-  elements.nextVideoButton.disabled = !hasNext;
+  const existingIds = new Set(videos.map((video) => video.fileId));
 
-  elements.nextVideoButton.textContent = hasNext
-    ? "Next video →"
-    : "End of list";
+  const newCount = candidates.filter(
+    (file) => !existingIds.has(file.fileId),
+  ).length;
 
-  if (!elements.playerDialog.open) {
-    elements.playerDialog.showModal();
+  const duplicateCount = candidates.length - newCount;
+
+  elements.folderImportCount.textContent = `${candidates.length} VIDEOS`;
+
+  const previewLimit = 100;
+
+  candidates.slice(0, previewLimit).forEach((file) => {
+    const item = document.createElement("li");
+    item.textContent = file.name;
+
+    item.title = file.folderPath
+      ? `${file.folderPath} / ${file.name}`
+      : file.name;
+
+    elements.folderImportList.append(item);
+  });
+
+  if (candidates.length > previewLimit) {
+    const more = document.createElement("li");
+
+    more.className = "drive-import-more";
+    more.textContent = `…and ${candidates.length - previewLimit} more video(s)`;
+
+    elements.folderImportList.append(more);
   }
+
+  elements.folderImportPreview.hidden = false;
+
+  elements.importScannedVideosButton.disabled = newCount === 0;
+
+  elements.importScannedVideosButton.textContent =
+    newCount > 0
+      ? `Import ${newCount} video${newCount === 1 ? "" : "s"}`
+      : "Nothing new to import";
+
+  let status = `${candidates.length} video(s) found · ${newCount} new · ${duplicateCount} already in library. Scanned ${result.scannedFolders} folder(s).`;
+
+  if (result.truncated) {
+    status += ` Safety limit reached (${MAX_DRIVE_SCAN_FOLDERS} folders or ${MAX_DRIVE_SCAN_VIDEOS} videos); some items may remain.`;
+  }
+
+  if (!result.includeSubfolders && result.childFolderCount > 0) {
+    status += ` ${result.childFolderCount} subfolder(s) were not opened.`;
+  }
+
+  if (result.skippedShortcuts > 0) {
+    status += ` ${result.skippedShortcuts} shortcut(s) skipped.`;
+  }
+
+  setFolderImportStatus(status, candidates.length ? "success" : "info");
+}
+
+async function handleScanDriveFolder() {
+  if (folderScanBusy) return;
+
+  const folderUrl = elements.driveFolderUrl.value.trim();
+  const apiKey = elements.driveApiKey.value.trim();
+  const folderId = extractDriveFolderId(folderUrl);
+
+  resetFolderImportScan();
+
+  if (!folderId) {
+    setFolderImportStatus(
+      "Enter a valid Google Drive folder URL containing /folders/ and its folder ID.",
+      "error",
+    );
+
+    elements.driveFolderUrl.focus();
+    return;
+  }
+
+  if (!apiKey) {
+    setFolderImportStatus(
+      "Paste your restricted Google Drive API key to scan this folder.",
+      "error",
+    );
+
+    elements.driveApiKey.focus();
+    return;
+  }
+
+  folderScanBusy = true;
+  elements.scanDriveFolderButton.disabled = true;
+  elements.scanDriveFolderButton.textContent = "Scanning…";
+
+  setFolderImportStatus("Connecting to Google Drive…", "working");
+
+  try {
+    const result = await scanPublicDriveFolder(
+      folderId,
+      apiKey,
+      elements.scanNestedFolders.checked,
+    );
+
+    folderScanResults = result;
+    showFolderScanPreview(result);
+
+    if (result.videos.length === 0) {
+      setFolderImportStatus(
+        "Folder access succeeded, but no recognizable video files were listed. Check that the target folder is shared as Anyone with the link — Viewer, or open the subfolder containing videos and scan it directly.",
+        "info",
+      );
+    }
+  } catch (error) {
+    console.error("Drive folder scan failed:", error);
+
+    folderScanResults = null;
+    resetFolderImportScan();
+
+    setFolderImportStatus(
+      error.message || "Could not scan this Drive folder.",
+      "error",
+    );
+  } finally {
+    folderScanBusy = false;
+    elements.scanDriveFolderButton.disabled = false;
+    elements.scanDriveFolderButton.textContent = "Scan folder";
+  }
+}
+
+function getFolderNameForImport(scan) {
+  const safeName = sanitizeImportedFolderName(scan.rootFolderName);
+
+  return (
+    categories.find(
+      (category) => category.toLowerCase() === safeName.toLowerCase(),
+    ) || safeName
+  );
+}
+
+function importScannedDriveVideos() {
+  if (!folderScanResults) {
+    showToast("Scan a Drive folder before importing.");
+    return;
+  }
+
+  const previousCategories = [...categories];
+  const previousVideos = videos;
+
+  const autoCreateFolder = elements.createMatchingFolder.checked;
+
+  let destination = autoCreateFolder
+    ? getFolderNameForImport(folderScanResults)
+    : elements.folderImportCategory.value;
+
+  if (!destination) destination = "Other";
+
+  if (
+    !categories.some(
+      (category) => category.toLowerCase() === destination.toLowerCase(),
+    )
+  ) {
+    categories.push(destination);
+  } else {
+    destination = categories.find(
+      (category) => category.toLowerCase() === destination.toLowerCase(),
+    );
+  }
+
+  const knownIds = new Set(videos.map((video) => video.fileId));
+
+  const candidates = folderScanResults.videos.filter(
+    (file) => !knownIds.has(file.fileId),
+  );
+
+  if (candidates.length === 0) {
+    showToast("All scanned videos are already in your library.");
+    return;
+  }
+
+  const now = Date.now();
+
+  const imported = candidates.map((file, index) => ({
+    id: makeId(),
+    fileId: file.fileId,
+    resourceKey: file.resourceKey || null,
+    title: cleanImportedTitle(file.name),
+    category: destination,
+    favorite: false,
+    addedAt: now + index,
+    lastWatched: null,
+    sourceFolderId: folderScanResults.rootFolderId,
+    sourceFolderName: folderScanResults.rootFolderName,
+    sourceFolderPath: file.folderPath || "",
+  }));
+
+  videos = [...imported, ...videos];
+
+  if (!saveCategories() || !saveLibrary()) {
+    categories = previousCategories;
+    videos = previousVideos;
+
+    saveCategories();
+    saveLibrary();
+    return;
+  }
+
+  currentView = "library";
+  currentCategory = destination;
+  elements.searchInput.value = "";
 
   render();
-}
 
-function playNext() {
-  const currentIndex = currentQueue.indexOf(currentVideoId);
+  closeDialog(elements.folderImportDialog);
+  elements.driveApiKey.value = "";
 
-  if (currentIndex < 0 || currentIndex >= currentQueue.length - 1) {
-    showToast("You've reached the end of this list.");
-    return;
-  }
-
-  const nextId = currentQueue[currentIndex + 1];
-
-  if (!videos.some((video) => video.id === nextId)) {
-    showToast("The next video is no longer in your library.");
-    return;
-  }
-
-  openPlayer(nextId, true);
-}
-
-function closePlayer() {
-  elements.videoFrame.src = "about:blank";
-
-  closeDialog(elements.playerDialog);
-
-  currentVideoId = null;
+  showToast(`Imported ${imported.length} video(s) into “${destination}”.`);
 }
 
 /* =========================================================
@@ -1359,12 +1892,38 @@ function wireEvents() {
     elements.importFileInput.click(),
   );
 
+  elements.importDriveFolderButton.addEventListener(
+    "click",
+    openFolderImportDialog,
+  );
+
+  elements.scanDriveFolderButton.addEventListener(
+    "click",
+    handleScanDriveFolder,
+  );
+
+  elements.importScannedVideosButton.addEventListener(
+    "click",
+    importScannedDriveVideos,
+  );
+
+  elements.cancelFolderImportButton.addEventListener("click", () =>
+    closeDialog(elements.folderImportDialog),
+  );
+
+  elements.createMatchingFolder.addEventListener(
+    "change",
+    updateFolderImportDestinationControl,
+  );
+
+  elements.folderImportDialog.addEventListener("close", () => {
+    // Never save the API key in local storage or library backups.
+    elements.driveApiKey.value = "";
+  });
+
   elements.importFileInput.addEventListener("change", (event) => {
     const file = event.target.files?.[0];
-
-    if (file) {
-      importLibraryFile(file);
-    }
+    if (file) importLibraryFile(file);
   });
 
   elements.sortSelect.addEventListener("change", render);
@@ -1413,9 +1972,7 @@ function wireEvents() {
   elements.categoryFilters.addEventListener("click", (event) => {
     const button = event.target.closest("[data-category]");
 
-    if (button) {
-      setCategory(button.dataset.category);
-    }
+    if (button) setCategory(button.dataset.category);
   });
 
   elements.searchInput.addEventListener("input", render);
@@ -1433,6 +1990,7 @@ function wireEvents() {
     elements.editDialog,
     elements.deleteDialog,
     elements.folderDialog,
+    elements.folderImportDialog,
     elements.playerDialog,
   ].forEach((dialog) => {
     dialog.addEventListener("click", (event) => {
@@ -1460,6 +2018,7 @@ function wireEvents() {
       elements.editDialog,
       elements.deleteDialog,
       elements.folderDialog,
+      elements.folderImportDialog,
       elements.playerDialog,
     ].some((dialog) => dialog.open);
 
@@ -1475,7 +2034,7 @@ function wireEvents() {
 }
 
 /* =========================================================
-   ADD VIDEO
+   ADD A SINGLE VIDEO
    ========================================================= */
 
 function handleAddVideo(event) {
@@ -1512,7 +2071,8 @@ function handleAddVideo(event) {
   }
 
   if (videos.some((video) => video.fileId === fileId)) {
-    elements.formError.textContent = "That video is already in your library.";
+    elements.formError.textContent =
+      "That Google Drive video is already in your library.";
 
     elements.formError.hidden = false;
     return;
@@ -1521,6 +2081,7 @@ function handleAddVideo(event) {
   const video = {
     id: makeId(),
     fileId,
+    resourceKey: driveResourceKey(rawUrl),
     title,
     category,
     favorite: false,
@@ -1536,7 +2097,6 @@ function handleAddVideo(event) {
   }
 
   elements.addForm.reset();
-
   renderCategoryOptions(elements.videoCategory, "Other");
 
   closeDialog(elements.addDialog);
