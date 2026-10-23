@@ -1,18 +1,23 @@
 "use strict";
 
+/* =========================================================
+   NYXPLAY — Personal Media Library
+   ========================================================= */
+
 const STORAGE_KEY = "nyxplay_library_v1";
-const THEME_KEY = "nyxplay_theme_v1";
 const CATEGORIES_KEY = "nyxplay_categories_v1";
-const THEMES = ["dark", "light"];
+const THEME_KEY = "nyxplay_theme_v1";
 const BUILTIN_CATEGORIES = ["Movies", "Series", "Cartoons", "Anime", "Other"];
 const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
-const MAX_DRIVE_SCAN_FOLDERS = 500;
-const MAX_DRIVE_SCAN_VIDEOS = 3000;
+const MAX_FOLDERS_TO_SCAN = 500;
+const MAX_VIDEOS_TO_SCAN = 3000;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
-const elements = {
+const el = {
+  homeOverview: $("#homeOverview"),
+  libraryWorkspace: $("#libraryWorkspace"),
   sidebarFolders: $("#sidebarFolders"),
   categoryFilters: $("#categoryFilters"),
   videoGrid: $("#videoGrid"),
@@ -27,6 +32,18 @@ const elements = {
   favoriteCount: $("#favoriteCount"),
   recentCount: $("#recentCount"),
   sortSelect: $("#sortSelect"),
+
+  addVideoButton: $("#addVideoButton"),
+  heroActionButton: $("#heroActionButton"),
+  emptyAddButton: $("#emptyAddButton"),
+  homeImportFolderButton: $("#homeImportFolderButton"),
+  themeButton: $("#themeButton"),
+  themeButtonLabel: $("#themeButtonLabel"),
+
+  sourceDialog: $("#sourceDialog"),
+  sourceForm: $("#sourceForm"),
+  sourceUrl: $("#sourceUrl"),
+  sourceStatus: $("#sourceStatus"),
 
   addDialog: $("#addDialog"),
   addForm: $("#addVideoForm"),
@@ -60,6 +77,15 @@ const elements = {
   importLibraryButton: $("#importLibraryButton"),
   importFileInput: $("#importFileInput"),
 
+  selectItemsButton: $("#selectItemsButton"),
+  bulkSelectionToolbar: $("#bulkSelectionToolbar"),
+  selectAllVisible: $("#selectAllVisible"),
+  selectedCount: $("#selectedCount"),
+  bulkMoveCategory: $("#bulkMoveCategory"),
+  bulkMoveButton: $("#bulkMoveButton"),
+  bulkDeleteButton: $("#bulkDeleteButton"),
+  exitSelectionButton: $("#exitSelectionButton"),
+
   importDriveFolderButton: $("#importDriveFolderButton"),
   folderImportDialog: $("#folderImportDialog"),
   driveFolderUrl: $("#driveFolderUrl"),
@@ -83,32 +109,39 @@ const elements = {
   nextVideoButton: $("#nextVideoButton"),
 
   toast: $("#toast"),
-  themeButton: $("#themeButton"),
-  themeButtonLabel: $("#themeButtonLabel"),
 };
 
 let categories = loadCategories();
 let videos = loadLibrary();
-let currentView = "library";
+let currentView = "home";
 let currentCategory = "All";
 let currentQueue = [];
 let currentVideoId = null;
-let pendingDeleteId = null;
-let toastTimeout = null;
+let pendingDeleteIds = [];
+let selectionMode = false;
 let folderScanResults = null;
 let folderScanBusy = false;
+let toastTimer = null;
+
+const selectedVideoIds = new Set();
 
 /* =========================================================
-   STORAGE AND DATA VALIDATION
+   STORAGE
    ========================================================= */
+
+function makeId() {
+  return crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
 
 function normalizeFolderName(value) {
   if (typeof value !== "string") return null;
 
   const name = value.trim().replace(/\s+/g, " ");
 
-  if (!name || name.length > 30) return null;
-  if (/[<>/\\\u0000-\u001f]/.test(name)) return null;
+  if (!name || name.length > 65) return null;
+  if (/[<>\u0000-\u001f]/.test(name)) return null;
 
   return name;
 }
@@ -116,34 +149,31 @@ function normalizeFolderName(value) {
 function loadCategories() {
   const result = [...BUILTIN_CATEGORIES];
 
-  const addUnique = (value) => {
+  function addUnique(value) {
     const name = normalizeFolderName(value);
-
     if (
       name &&
       !result.some((item) => item.toLowerCase() === name.toLowerCase())
     ) {
       result.push(name);
     }
-  };
-
-  try {
-    const stored = JSON.parse(localStorage.getItem(CATEGORIES_KEY) || "[]");
-
-    if (Array.isArray(stored)) stored.forEach(addUnique);
-  } catch (error) {
-    console.warn("Could not read custom folders:", error);
   }
 
-  // Preserve custom categories already present in the existing library.
+  try {
+    const saved = JSON.parse(localStorage.getItem(CATEGORIES_KEY) || "[]");
+    if (Array.isArray(saved)) saved.forEach(addUnique);
+  } catch (error) {
+    console.warn("Could not read saved folder names:", error);
+  }
+
+  // Preserve categories used by the existing library.
   try {
     const oldVideos = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-
     if (Array.isArray(oldVideos)) {
       oldVideos.forEach((video) => addUnique(video?.category));
     }
   } catch {
-    // Corrupt library data is handled separately.
+    // Malformed library data will be ignored by loadLibrary().
   }
 
   return result;
@@ -152,47 +182,46 @@ function loadCategories() {
 function saveCategories() {
   try {
     localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categories));
-
     return true;
   } catch (error) {
-    console.error("Could not save folders:", error);
-    showToast("Could not save folders. Check browser storage.");
+    console.error(error);
+    showToast("Couldn't save folders. Check browser storage.");
     return false;
   }
 }
 
 function loadLibrary() {
   try {
-    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    if (!Array.isArray(saved)) return [];
 
-    if (!Array.isArray(stored)) return [];
-
-    return stored
+    return saved
       .filter(
-        (item) =>
-          item &&
-          typeof item.id === "string" &&
-          typeof item.fileId === "string" &&
-          /^[a-zA-Z0-9_-]+$/.test(item.fileId) &&
-          typeof item.title === "string" &&
-          item.title.trim().length > 0 &&
-          categories.includes(item.category),
+        (video) =>
+          video &&
+          typeof video.id === "string" &&
+          typeof video.fileId === "string" &&
+          /^[A-Za-z0-9_-]+$/.test(video.fileId) &&
+          typeof video.title === "string" &&
+          video.title.trim() &&
+          typeof video.category === "string",
       )
-      .map((item) => ({
-        id: item.id,
-        fileId: item.fileId,
-        resourceKey:
-          typeof item.resourceKey === "string" ? item.resourceKey : null,
-        title: item.title.trim(),
-        category: item.category,
-        favorite: Boolean(item.favorite),
-        addedAt: Number.isFinite(item.addedAt) ? item.addedAt : Date.now(),
-        lastWatched: Number.isFinite(item.lastWatched)
-          ? item.lastWatched
+      .map((video) => ({
+        ...video,
+        title: video.title.trim(),
+        category: categories.includes(video.category)
+          ? video.category
+          : "Other",
+        favorite: Boolean(video.favorite),
+        addedAt: Number.isFinite(video.addedAt) ? video.addedAt : Date.now(),
+        lastWatched: Number.isFinite(video.lastWatched)
+          ? video.lastWatched
           : null,
+        resourceKey:
+          typeof video.resourceKey === "string" ? video.resourceKey : null,
       }));
   } catch (error) {
-    console.error("Could not read the NYXPLAY library:", error);
+    console.error("Could not read library:", error);
     return [];
   }
 }
@@ -202,20 +231,56 @@ function saveLibrary() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(videos));
     return true;
   } catch (error) {
-    console.error("Could not save the NYXPLAY library:", error);
-    showToast("Could not save the library. Check browser storage.");
+    console.error(error);
+    showToast("Couldn't save the library. Check browser storage.");
     return false;
   }
 }
 
-function makeId() {
-  return window.crypto?.randomUUID
-    ? window.crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+/* =========================================================
+   THEME AND NOTIFICATIONS
+   ========================================================= */
+
+function showToast(message) {
+  const toast = el.toast;
+  toast.textContent = message;
+  toast.classList.add("visible");
+
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove("visible"), 2800);
+}
+
+function applyTheme(theme, announce = false) {
+  const selected = theme === "light" ? "light" : "dark";
+  document.body.dataset.theme = selected;
+
+  const lightIsActive = selected === "light";
+  const label = lightIsActive ? "Dark mode" : "Light mode";
+  const icon = lightIsActive ? "☾" : "☀";
+
+  const iconElement = el.themeButton.querySelector(".theme-icon");
+  if (iconElement) iconElement.textContent = icon;
+  el.themeButtonLabel.textContent = label;
+  el.themeButton.setAttribute("aria-label", `Switch to ${label.toLowerCase()}`);
+
+  const metaTheme = $('meta[name="theme-color"]');
+  if (metaTheme) metaTheme.content = lightIsActive ? "#f5f6fb" : "#101116";
+
+  try {
+    localStorage.setItem(THEME_KEY, selected);
+  } catch (error) {
+    console.warn("Could not save theme preference:", error);
+  }
+
+  if (announce) showToast(`Switched to ${selected} mode.`);
+}
+
+function toggleTheme() {
+  applyTheme(document.body.dataset.theme === "dark" ? "light" : "dark", true);
 }
 
 /* =========================================================
-   GOOGLE DRIVE LINKS
+   GOOGLE DRIVE URL DETECTION
    ========================================================= */
 
 function extractDriveFileId(rawUrl) {
@@ -223,20 +288,15 @@ function extractDriveFileId(rawUrl) {
     const url = new URL(rawUrl.trim());
 
     if (url.protocol !== "https:") return null;
-
     if (!["drive.google.com", "docs.google.com"].includes(url.hostname)) {
       return null;
     }
 
-    const filePath = url.pathname.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+    const fileMatch = url.pathname.match(/\/file\/d\/([A-Za-z0-9_-]+)/);
+    const docMatch = url.pathname.match(/\/document\/d\/([A-Za-z0-9_-]+)/);
 
-    const documentPath = url.pathname.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
-
-    const id = filePath?.[1] || documentPath?.[1] || url.searchParams.get("id");
-
-    if (!id || !/^[a-zA-Z0-9_-]+$/.test(id)) return null;
-
-    return id;
+    const id = fileMatch?.[1] || docMatch?.[1] || url.searchParams.get("id");
+    return id && /^[A-Za-z0-9_-]+$/.test(id) ? id : null;
   } catch {
     return null;
   }
@@ -250,9 +310,15 @@ function extractDriveFolderId(rawUrl) {
       return null;
     }
 
-    const match = url.pathname.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    return url.pathname.match(/\/folders\/([A-Za-z0-9_-]+)/)?.[1] || null;
+  } catch {
+    return null;
+  }
+}
 
-    return match?.[1] || null;
+function getResourceKey(rawUrl) {
+  try {
+    return new URL(rawUrl).searchParams.get("resourcekey") || null;
   } catch {
     return null;
   }
@@ -262,11 +328,7 @@ function driveViewUrl(fileId, resourceKey = null) {
   const url = new URL(
     `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`,
   );
-
-  if (resourceKey) {
-    url.searchParams.set("resourcekey", resourceKey);
-  }
-
+  if (resourceKey) url.searchParams.set("resourcekey", resourceKey);
   return url.toString();
 }
 
@@ -274,148 +336,92 @@ function drivePreviewUrl(fileId, resourceKey = null) {
   const url = new URL(
     `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`,
   );
-
-  if (resourceKey) {
-    url.searchParams.set("resourcekey", resourceKey);
-  }
-
+  if (resourceKey) url.searchParams.set("resourcekey", resourceKey);
   return url.toString();
 }
 
-function driveResourceKey(rawUrl) {
-  try {
-    const url = new URL(rawUrl.trim());
-
-    return (
-      url.searchParams.get("resourcekey") ||
-      url.searchParams.get("resourceKey") ||
-      null
-    );
-  } catch {
-    return null;
-  }
-}
-
 /* =========================================================
-   NOTIFICATIONS AND THEMES
+   SOURCE SELECTOR
    ========================================================= */
 
-function showToast(message) {
-  elements.toast.textContent = message;
-  elements.toast.classList.add("visible");
+function openSourceDialog() {
+  el.sourceStatus.textContent = "Paste a file or folder link to continue.";
+  el.sourceStatus.dataset.state = "info";
+  el.sourceUrl.value = "";
 
-  clearTimeout(toastTimeout);
-
-  toastTimeout = setTimeout(() => {
-    elements.toast.classList.remove("visible");
-  }, 2700);
+  if (!el.sourceDialog.open) el.sourceDialog.showModal();
+  setTimeout(() => el.sourceUrl.focus(), 40);
 }
 
-function getSavedTheme() {
-  try {
-    return localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
-  } catch {
-    return "dark";
-  }
-}
+function detectSource(event) {
+  event.preventDefault();
 
-function applyTheme(theme, announce = false) {
-  if (!THEMES.includes(theme)) theme = "dark";
+  const rawUrl = el.sourceUrl.value.trim();
 
-  document.body.dataset.theme = theme;
-
-  const isDark = theme === "dark";
-  const nextModeLabel = isDark ? "Light mode" : "Dark mode";
-  const icon = isDark ? "☀" : "☾";
-  const iconElement = elements.themeButton?.querySelector(".theme-icon");
-
-  if (elements.themeButtonLabel) {
-    elements.themeButtonLabel.textContent = nextModeLabel;
+  if (extractDriveFolderId(rawUrl)) {
+    el.driveFolderUrl.value = rawUrl;
+    closeDialog(el.sourceDialog);
+    openFolderImportDialog();
+    return;
   }
 
-  if (iconElement) iconElement.textContent = icon;
+  if (extractDriveFileId(rawUrl)) {
+    el.driveUrl.value = rawUrl;
+    el.videoTitle.value = "";
+    renderCategoryOptions(el.videoCategory, "Other");
 
-  if (elements.themeButton) {
-    elements.themeButton.title = `Switch to ${nextModeLabel.toLowerCase()}`;
-
-    elements.themeButton.setAttribute(
-      "aria-label",
-      `Switch to ${nextModeLabel.toLowerCase()}`,
-    );
+    closeDialog(el.sourceDialog);
+    openAddDialog();
+    showToast("Video link detected. Add a title and save it.");
+    return;
   }
 
-  const themeColorMeta = document.querySelector('meta[name="theme-color"]');
-
-  if (themeColorMeta) {
-    themeColorMeta.content = isDark ? "#101116" : "#f5f6fb";
-  }
-
-  try {
-    localStorage.setItem(THEME_KEY, theme);
-  } catch (error) {
-    console.warn("Theme preference could not be saved:", error);
-  }
-
-  if (announce) {
-    showToast(`Switched to ${isDark ? "dark" : "light"} mode.`);
-  }
-}
-
-function cycleTheme() {
-  const current = document.body.dataset.theme || "dark";
-
-  applyTheme(current === "dark" ? "light" : "dark", true);
+  el.sourceStatus.textContent =
+    "This link isn't a supported Google Drive file or folder URL.";
+  el.sourceStatus.dataset.state = "error";
 }
 
 /* =========================================================
-   DIALOG HELPERS
+   DIALOGS AND SELECT OPTIONS
    ========================================================= */
 
 function closeDialog(dialog) {
   if (dialog?.open) dialog.close();
 }
 
-function renderCategoryOptions(selectElement, selectedValue = "Other") {
-  if (!selectElement) return;
+function renderCategoryOptions(select, selected = "Other") {
+  if (!select) return;
 
-  selectElement.replaceChildren();
+  select.replaceChildren();
 
   categories.forEach((category) => {
     const option = document.createElement("option");
     option.value = category;
     option.textContent = category;
-    selectElement.append(option);
+    select.append(option);
   });
 
-  selectElement.value = categories.includes(selectedValue)
-    ? selectedValue
-    : "Other";
+  select.value = categories.includes(selected) ? selected : "Other";
 }
 
 function openAddDialog() {
-  elements.formError.hidden = true;
-  elements.formError.textContent = "";
+  el.formError.hidden = true;
+  el.formError.textContent = "";
+  renderCategoryOptions(el.videoCategory, el.videoCategory.value || "Other");
 
-  renderCategoryOptions(
-    elements.videoCategory,
-    elements.videoCategory.value || "Other",
-  );
-
-  if (!elements.addDialog.open) {
-    elements.addDialog.showModal();
-  }
-
-  setTimeout(() => elements.videoTitle.focus(), 50);
+  if (!el.addDialog.open) el.addDialog.showModal();
+  setTimeout(() => el.videoTitle.focus(), 40);
 }
 
 /* =========================================================
-   LIBRARY FILTERING AND SORTING
+   HOME, LIBRARY, SEARCH AND SORTING
    ========================================================= */
 
 function getVisibleVideos() {
-  const query = elements.searchInput.value.trim().toLowerCase();
+  if (currentView === "home") return [];
 
   let result = [...videos];
+  const search = el.searchInput.value.trim().toLowerCase();
 
   if (currentView === "favorites") {
     result = result.filter((video) => video.favorite);
@@ -427,170 +433,310 @@ function getVisibleVideos() {
     result = result.filter((video) => video.category === currentCategory);
   }
 
-  if (query) {
+  if (search) {
     result = result.filter((video) =>
-      `${video.title} ${video.category} Google Drive`
+      `${video.title} ${video.category} ${video.sourceFolderPath || ""}`
         .toLowerCase()
-        .includes(query),
+        .includes(search),
     );
   }
 
-  const sortMode = elements.sortSelect?.value || "smart";
-
-  const byAddedDesc = (a, b) => (b.addedAt || 0) - (a.addedAt || 0);
-
-  const byWatchedDesc = (a, b) => (b.lastWatched || 0) - (a.lastWatched || 0);
-
-  const byTitleAsc = (a, b) =>
+  const mode = el.sortSelect.value || "smart";
+  const titleCompare = (a, b) =>
     a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
 
-  switch (sortMode) {
+  switch (mode) {
     case "title-asc":
-      result.sort(byTitleAsc);
+      result.sort(titleCompare);
       break;
-
     case "title-desc":
-      result.sort((a, b) => byTitleAsc(b, a));
+      result.sort((a, b) => titleCompare(b, a));
       break;
-
     case "added-newest":
-      result.sort(byAddedDesc);
+      result.sort((a, b) => b.addedAt - a.addedAt);
       break;
-
     case "added-oldest":
-      result.sort((a, b) => byAddedDesc(b, a));
+      result.sort((a, b) => a.addedAt - b.addedAt);
       break;
-
     case "watched-newest":
-      result.sort(byWatchedDesc);
+      result.sort((a, b) => (b.lastWatched || 0) - (a.lastWatched || 0));
       break;
-
     default:
       if (currentView === "recent") {
-        result.sort(byWatchedDesc);
+        result.sort((a, b) => (b.lastWatched || 0) - (a.lastWatched || 0));
       } else {
-        result.sort(byAddedDesc);
+        result.sort((a, b) => b.addedAt - a.addedAt);
       }
   }
 
   return result;
 }
 
-/* =========================================================
-   SIDEBAR AND CATEGORY FILTERS
-   ========================================================= */
-
 function folderColor(index) {
-  const colors = [
-    "#aaa4ff",
-    "#ff9ccf",
-    "#83c9e8",
-    "#e9ba77",
-    "#8ed9b9",
-    "#b7a2ff",
-    "#f3a080",
-    "#83d4c0",
-  ];
-
-  return colors[index % colors.length];
+  return ["#aaa4ff", "#ff9ccf", "#83c9e8", "#e9ba77", "#8ed9b9"][index % 5];
 }
 
 function renderSidebarFolders() {
-  elements.sidebarFolders.replaceChildren();
+  el.sidebarFolders.replaceChildren();
 
   categories.forEach((category, index) => {
     const button = document.createElement("button");
     button.type = "button";
-
-    button.className = `folder-item${
-      currentCategory === category ? " active" : ""
-    }`;
-
+    button.className = `folder-item${currentView === "library" && currentCategory === category ? " active" : ""}`;
     button.dataset.category = category;
 
     const dot = document.createElement("span");
     dot.className = "folder-dot";
     dot.style.background = folderColor(index);
 
-    const label = document.createElement("span");
-    label.textContent = category;
+    const name = document.createElement("span");
+    name.textContent = category;
 
     const count = document.createElement("span");
     count.className = "folder-item-count";
+    count.textContent = String(
+      videos.filter((video) => video.category === category).length,
+    );
 
-    count.textContent = videos.filter(
-      (video) => video.category === category,
-    ).length;
-
-    button.append(dot, label, count);
-    elements.sidebarFolders.append(button);
+    button.append(dot, name, count);
+    el.sidebarFolders.append(button);
   });
 }
 
 function renderCategoryFilters() {
-  elements.categoryFilters.replaceChildren();
+  el.categoryFilters.replaceChildren();
 
   ["All", ...categories].forEach((category) => {
     const button = document.createElement("button");
     button.type = "button";
-
-    button.className = `filter-button${
-      currentCategory === category ? " active" : ""
-    }`;
-
+    button.className = `filter-button${currentCategory === category ? " active" : ""}`;
     button.dataset.category = category;
     button.textContent = category;
-
-    elements.categoryFilters.append(button);
+    el.categoryFilters.append(button);
   });
+}
+
+/* =========================================================
+   MULTI-SELECTION AND BULK ACTIONS
+   ========================================================= */
+
+function enterSelectionMode() {
+  selectionMode = true;
+  selectedVideoIds.clear();
+  render();
+}
+
+function exitSelectionMode() {
+  selectionMode = false;
+  selectedVideoIds.clear();
+  render();
+}
+
+function toggleSelection(id) {
+  if (selectedVideoIds.has(id)) selectedVideoIds.delete(id);
+  else selectedVideoIds.add(id);
+  render();
+}
+
+function selectAllVisible() {
+  const visible = getVisibleVideos();
+  const allSelected =
+    visible.length > 0 &&
+    visible.every((video) => selectedVideoIds.has(video.id));
+
+  if (allSelected) {
+    visible.forEach((video) => selectedVideoIds.delete(video.id));
+  } else {
+    visible.forEach((video) => selectedVideoIds.add(video.id));
+  }
+
+  render();
+}
+
+function updateSelectionToolbar(visible) {
+  el.bulkSelectionToolbar.hidden = !selectionMode;
+  el.selectItemsButton.textContent = selectionMode
+    ? "✕ Cancel selection"
+    : "☑ Select items";
+
+  el.selectedCount.textContent = `${selectedVideoIds.size} selected`;
+
+  renderCategoryOptions(
+    el.bulkMoveCategory,
+    el.bulkMoveCategory.value || "Other",
+  );
+
+  const selectedVisible = visible.filter((video) =>
+    selectedVideoIds.has(video.id),
+  ).length;
+
+  el.selectAllVisible.checked =
+    visible.length > 0 && selectedVisible === visible.length;
+
+  el.selectAllVisible.indeterminate =
+    selectedVisible > 0 && selectedVisible < visible.length;
+
+  el.bulkMoveButton.disabled = selectedVideoIds.size === 0;
+  el.bulkDeleteButton.disabled = selectedVideoIds.size === 0;
+}
+
+function moveSelectedVideos() {
+  const ids = [...selectedVideoIds];
+  const destination = el.bulkMoveCategory.value;
+
+  if (!ids.length || !categories.includes(destination)) {
+    showToast("Select videos and choose a destination folder.");
+    return;
+  }
+
+  const previous = videos.map((video) => ({ ...video }));
+
+  videos.forEach((video) => {
+    if (selectedVideoIds.has(video.id)) {
+      video.category = destination;
+    }
+  });
+
+  if (!saveLibrary()) {
+    videos = previous;
+    return;
+  }
+
+  selectionMode = false;
+  selectedVideoIds.clear();
+  currentView = "library";
+  currentCategory = destination;
+  render();
+  showToast(`Moved ${ids.length} video(s) to “${destination}”.`);
+}
+
+function requestBulkDelete() {
+  pendingDeleteIds = [...selectedVideoIds];
+
+  if (!pendingDeleteIds.length) return;
+
+  el.deleteMessage.textContent =
+    `Remove ${pendingDeleteIds.length} selected video(s) from NYXPLAY? ` +
+    "The original files in Google Drive will not be deleted.";
+
+  if (!el.deleteDialog.open) el.deleteDialog.showModal();
+}
+
+function confirmDelete() {
+  const ids = new Set(pendingDeleteIds);
+
+  if (!ids.size) {
+    closeDialog(el.deleteDialog);
+    return;
+  }
+
+  const previous = videos;
+  videos = videos.filter((video) => !ids.has(video.id));
+
+  if (!saveLibrary()) {
+    videos = previous;
+    return;
+  }
+
+  if (currentVideoId && ids.has(currentVideoId)) closePlayer();
+
+  currentQueue = currentQueue.filter((id) => !ids.has(id));
+  ids.forEach((id) => selectedVideoIds.delete(id));
+
+  const count = ids.size;
+  pendingDeleteIds = [];
+  selectionMode = false;
+
+  closeDialog(el.deleteDialog);
+  render();
+
+  showToast(
+    count === 1
+      ? "Video removed from NYXPLAY. The Drive file is unchanged."
+      : `Removed ${count} videos from NYXPLAY. Drive files are unchanged.`,
+  );
 }
 
 /* =========================================================
    VIDEO CARDS
    ========================================================= */
 
-function makeCardAction(label, text, className, handler) {
+function actionButton(label, symbol, className, handler) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = className;
-  button.textContent = text;
+  button.textContent = symbol;
   button.title = label;
   button.setAttribute("aria-label", label);
   button.addEventListener("click", handler);
-
   return button;
 }
 
 function createVideoCard(video) {
-  const article = document.createElement("article");
-  article.className = "video-card";
+  const card = document.createElement("article");
+  card.className = "video-card";
+
+  const posterWrap = document.createElement("div");
+  posterWrap.className = `poster-wrap${selectedVideoIds.has(video.id) ? " is-selected" : ""}`;
 
   const poster = document.createElement("button");
   poster.type = "button";
   poster.className = "poster";
-  poster.setAttribute("aria-label", `Play ${video.title}`);
+  poster.setAttribute(
+    "aria-label",
+    selectionMode ? `Select ${video.title}` : `Play ${video.title}`,
+  );
 
-  poster.addEventListener("click", () => openPlayer(video.id));
+  poster.addEventListener("click", () => {
+    if (selectionMode) toggleSelection(video.id);
+    else openPlayer(video.id);
+  });
 
-  const posterCategory = document.createElement("span");
-  posterCategory.className = "poster-category";
-  posterCategory.textContent = video.category.toUpperCase();
-
-  const posterIcon = document.createElement("span");
-  posterIcon.className = "poster-icon";
-  posterIcon.textContent = "▶";
-  posterIcon.setAttribute("aria-hidden", "true");
-
-  const posterLabel = document.createElement("span");
-  posterLabel.className = "poster-label";
-  posterLabel.textContent = "GOOGLE DRIVE";
+  const category = document.createElement("span");
+  category.className = "poster-category";
+  category.textContent = video.category.toUpperCase();
 
   const play = document.createElement("span");
-  play.className = "poster-play";
-  play.textContent = "▶";
-  play.setAttribute("aria-hidden", "true");
+  play.className = "poster-icon";
+  play.textContent = selectionMode
+    ? selectedVideoIds.has(video.id)
+      ? "✓"
+      : "＋"
+    : "▶";
 
-  poster.append(posterCategory, posterIcon, posterLabel, play);
+  const label = document.createElement("span");
+  label.className = "poster-label";
+  label.textContent = video.sourceFolderPath || "GOOGLE DRIVE";
+
+  const playHover = document.createElement("span");
+  playHover.className = "poster-play";
+  playHover.textContent = selectionMode
+    ? selectedVideoIds.has(video.id)
+      ? "✓"
+      : "＋"
+    : "▶";
+
+  poster.append(category, play, label, playHover);
+  posterWrap.append(poster);
+
+  if (selectionMode) {
+    const labelWrap = document.createElement("label");
+    labelWrap.className = "select-card-control";
+
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = selectedVideoIds.has(video.id);
+    check.setAttribute("aria-label", `Select ${video.title}`);
+
+    check.addEventListener("click", (event) => event.stopPropagation());
+    check.addEventListener("change", () => toggleSelection(video.id));
+
+    const labelText = document.createElement("span");
+    labelText.textContent = "Select";
+
+    labelWrap.append(check, labelText);
+    posterWrap.append(labelWrap);
+  }
 
   const meta = document.createElement("div");
   meta.className = "card-meta";
@@ -604,7 +750,6 @@ function createVideoCard(video) {
 
   const subtitle = document.createElement("p");
   subtitle.className = "card-subtitle";
-
   subtitle.textContent = video.lastWatched
     ? `Watched ${new Date(video.lastWatched).toLocaleDateString()}`
     : `Added ${new Date(video.addedAt).toLocaleDateString()}`;
@@ -614,34 +759,33 @@ function createVideoCard(video) {
   const actions = document.createElement("div");
   actions.className = "card-actions";
 
-  const favorite = makeCardAction(
+  const favorite = actionButton(
     video.favorite ? "Remove from favorites" : "Add to favorites",
     video.favorite ? "♥" : "♡",
     `favorite-button${video.favorite ? " is-favorite" : ""}`,
     () => toggleFavorite(video.id),
   );
-
   favorite.setAttribute("aria-pressed", String(Boolean(video.favorite)));
 
-  const edit = makeCardAction(
+  const edit = actionButton(
     "Edit video details",
     "✎",
     "small-action-button",
     () => openEditDialog(video.id),
   );
 
-  const remove = makeCardAction(
+  const remove = actionButton(
     "Delete video from library",
     "×",
     "small-action-button delete-action",
-    () => requestDeleteVideo(video.id),
+    () => requestDeleteOne(video.id),
   );
 
   actions.append(favorite, edit, remove);
   meta.append(text, actions);
-  article.append(poster, meta);
+  card.append(posterWrap, meta);
 
-  return article;
+  return card;
 }
 
 /* =========================================================
@@ -649,93 +793,91 @@ function createVideoCard(video) {
    ========================================================= */
 
 function render() {
-  const visibleVideos = getVisibleVideos();
+  const isHome = currentView === "home";
+  const visible = getVisibleVideos();
 
-  elements.videoGrid.replaceChildren();
+  el.homeOverview.hidden = !isHome;
+  el.libraryWorkspace.hidden = isHome;
 
-  visibleVideos.forEach((video) => {
-    elements.videoGrid.append(createVideoCard(video));
-  });
+  el.videoGrid.replaceChildren();
+  visible.forEach((video) => el.videoGrid.append(createVideoCard(video)));
 
-  elements.videoCount.textContent = videos.length;
-
-  elements.favoriteCount.textContent = videos.filter(
+  el.videoCount.textContent = videos.length;
+  el.favoriteCount.textContent = videos.filter(
     (video) => video.favorite,
   ).length;
-
-  elements.recentCount.textContent = videos.filter(
+  el.recentCount.textContent = videos.filter(
     (video) => video.lastWatched,
   ).length;
+  el.resultCount.textContent = `${visible.length} ${visible.length === 1 ? "ITEM" : "ITEMS"}`;
 
-  elements.resultCount.textContent = `${visibleVideos.length} ${
-    visibleVideos.length === 1 ? "ITEM" : "ITEMS"
-  }`;
+  el.emptyState.hidden = visible.length > 0;
+  el.videoGrid.hidden = visible.length === 0;
 
-  elements.emptyState.hidden = visibleVideos.length > 0;
-  elements.videoGrid.hidden = visibleVideos.length === 0;
+  if (!videos.length) {
+    el.emptyTitle.textContent = "Your library starts here.";
+    el.emptyMessage.textContent =
+      "Add a Google Drive video or import a shared Drive folder.";
+  } else if (!visible.length) {
+    el.emptyTitle.textContent = "Nothing to show here.";
+    el.emptyMessage.textContent =
+      "Try another folder, clear the search, or add a video.";
+  }
 
-  if (videos.length === 0) {
-    elements.emptyTitle.textContent = "Your library starts here.";
+  const labels = {
+    home: ["Home", "Explore NYXPLAY"],
+    library: ["Library", "Explore your library"],
+    recent: ["Recently watched", "Continue watching"],
+    favorites: ["Favorites", "Your favorites"],
+  };
 
-    elements.emptyMessage.textContent =
-      "Add a Google Drive video to create your personal collection.";
-  } else if (visibleVideos.length === 0) {
-    elements.emptyTitle.textContent = "Nothing to show here.";
+  const [pageLabel, sectionTitle] = labels[currentView] || labels.home;
+  el.pageLabel.textContent =
+    currentCategory === "All" ? pageLabel : currentCategory;
 
-    elements.emptyMessage.textContent =
-      "Try another folder, clear your search, or add a video.";
+  if (el.sectionTitle) {
+    el.sectionTitle.textContent =
+      currentCategory !== "All" ? currentCategory : sectionTitle;
   }
 
   $$(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === currentView);
   });
 
-  const labels = {
-    library: ["All videos", "Explore your library"],
-    recent: ["Recently watched", "Pick up where you left off"],
-    favorites: ["Favorites", "Your favorites"],
-  };
-
-  const [pageLabel, sectionTitle] = labels[currentView];
-
-  elements.pageLabel.textContent =
-    currentCategory === "All" ? pageLabel : currentCategory;
-
-  elements.sectionTitle.textContent =
-    currentCategory !== "All"
-      ? currentCategory
-      : currentView === "library"
-        ? sectionTitle
-        : currentView === "recent"
-          ? "Continue watching"
-          : "Your favorites";
-
   renderSidebarFolders();
   renderCategoryFilters();
 
+  renderCategoryOptions(el.videoCategory, el.videoCategory.value || "Other");
   renderCategoryOptions(
-    elements.videoCategory,
-    elements.videoCategory.value || "Other",
+    el.editVideoCategory,
+    el.editVideoCategory.value || "Other",
   );
-
   renderCategoryOptions(
-    elements.editVideoCategory,
-    elements.editVideoCategory.value || "Other",
+    el.folderImportCategory,
+    el.folderImportCategory.value || "Other",
   );
-
   renderCategoryOptions(
-    elements.folderImportCategory,
-    elements.folderImportCategory.value || "Other",
+    el.bulkMoveCategory,
+    el.bulkMoveCategory.value || "Other",
   );
 
   updateFolderImportDestinationControl();
+  updateSelectionToolbar(visible);
+}
+
+function goToView(view) {
+  if (!["home", "library", "recent", "favorites"].includes(view)) return;
+
+  currentView = view;
+  currentCategory = "All";
+  render();
+  document.body.classList.remove("sidebar-open");
 }
 
 function setCategory(category) {
-  if (category !== "All" && !categories.includes(category)) {
-    return;
-  }
+  if (category !== "All" && !categories.includes(category)) return;
 
+  currentView = "library";
   currentCategory = category;
   render();
 }
@@ -749,7 +891,6 @@ function toggleFavorite(id) {
   if (!video) return;
 
   video.favorite = !video.favorite;
-
   saveLibrary();
   render();
 
@@ -757,251 +898,189 @@ function toggleFavorite(id) {
 }
 
 /* =========================================================
-   VIDEO PLAYER
+   SINGLE VIDEO ADD / EDIT / DELETE
    ========================================================= */
 
-function openPlayer(id, keepQueue = false) {
-  const video = videos.find((item) => item.id === id);
-  if (!video) return;
+function handleAddVideo(event) {
+  event.preventDefault();
 
-  if (!keepQueue) {
-    currentQueue = getVisibleVideos().map((item) => item.id);
+  const title = el.videoTitle.value.trim();
+  const url = el.driveUrl.value.trim();
+  const fileId = extractDriveFileId(url);
+  const category = el.videoCategory.value;
 
-    if (!currentQueue.includes(id)) {
-      currentQueue.unshift(id);
-    }
+  el.formError.hidden = true;
+  el.formError.textContent = "";
+
+  if (!title) {
+    el.formError.textContent = "Enter a video title.";
+    el.formError.hidden = false;
+    return;
   }
 
-  currentVideoId = id;
-  video.lastWatched = Date.now();
-  saveLibrary();
-
-  elements.playerTitle.textContent = video.title;
-
-  elements.playerCategory.textContent = `Folder: ${video.category} · Google Drive`;
-
-  elements.videoFrame.src = drivePreviewUrl(video.fileId, video.resourceKey);
-
-  elements.openDriveButton.onclick = () => {
-    window.open(
-      driveViewUrl(video.fileId, video.resourceKey),
-      "_blank",
-      "noopener,noreferrer",
-    );
-  };
-
-  const currentIndex = currentQueue.indexOf(id);
-  const hasNext = currentIndex >= 0 && currentIndex < currentQueue.length - 1;
-
-  elements.nextVideoButton.disabled = !hasNext;
-
-  elements.nextVideoButton.textContent = hasNext
-    ? "Next video →"
-    : "End of list";
-
-  if (!elements.playerDialog.open) {
-    elements.playerDialog.showModal();
+  if (!fileId) {
+    el.formError.textContent =
+      "Paste a valid Google Drive file link, not a folder link.";
+    el.formError.hidden = false;
+    return;
   }
+
+  if (!categories.includes(category)) {
+    el.formError.textContent = "Choose a valid folder.";
+    el.formError.hidden = false;
+    return;
+  }
+
+  if (videos.some((video) => video.fileId === fileId)) {
+    el.formError.textContent = "That video is already in the library.";
+    el.formError.hidden = false;
+    return;
+  }
+
+  videos.unshift({
+    id: makeId(),
+    fileId,
+    resourceKey: getResourceKey(url),
+    title,
+    category,
+    favorite: false,
+    addedAt: Date.now(),
+    lastWatched: null,
+    sourceFolderId: null,
+    sourceFolderName: null,
+    sourceFolderPath: null,
+  });
+
+  if (!saveLibrary()) {
+    videos.shift();
+    return;
+  }
+
+  el.addForm.reset();
+  closeDialog(el.addDialog);
+
+  currentView = "library";
+  currentCategory = "All";
+  selectionMode = false;
+  selectedVideoIds.clear();
 
   render();
+  showToast("Video added to your library.");
 }
-
-function playNext() {
-  const currentIndex = currentQueue.indexOf(currentVideoId);
-
-  if (currentIndex < 0 || currentIndex >= currentQueue.length - 1) {
-    showToast("You've reached the end of this list.");
-    return;
-  }
-
-  const nextId = currentQueue[currentIndex + 1];
-
-  if (!videos.some((video) => video.id === nextId)) {
-    showToast("The next video is no longer in your library.");
-    return;
-  }
-
-  openPlayer(nextId, true);
-}
-
-function closePlayer() {
-  elements.videoFrame.src = "about:blank";
-  closeDialog(elements.playerDialog);
-  currentVideoId = null;
-}
-
-/* =========================================================
-   EDIT VIDEO
-   ========================================================= */
 
 function openEditDialog(id) {
   const video = videos.find((item) => item.id === id);
   if (!video) return;
 
-  elements.editFormError.hidden = true;
-  elements.editFormError.textContent = "";
+  el.editFormError.hidden = true;
+  el.editFormError.textContent = "";
 
-  elements.editVideoId.value = video.id;
-  elements.editVideoTitle.value = video.title;
-  elements.editDriveUrl.value = driveViewUrl(video.fileId, video.resourceKey);
+  el.editVideoId.value = video.id;
+  el.editVideoTitle.value = video.title;
+  el.editDriveUrl.value = driveViewUrl(video.fileId, video.resourceKey);
 
-  renderCategoryOptions(elements.editVideoCategory, video.category);
+  renderCategoryOptions(el.editVideoCategory, video.category);
 
-  if (!elements.editDialog.open) {
-    elements.editDialog.showModal();
-  }
-
-  setTimeout(() => elements.editVideoTitle.focus(), 50);
+  if (!el.editDialog.open) el.editDialog.showModal();
+  setTimeout(() => el.editVideoTitle.focus(), 40);
 }
 
 function handleEditVideo(event) {
   event.preventDefault();
 
-  const id = elements.editVideoId.value;
+  const id = el.editVideoId.value;
   const video = videos.find((item) => item.id === id);
   if (!video) return;
 
-  const title = elements.editVideoTitle.value.trim();
-  const fileId = extractDriveFileId(elements.editDriveUrl.value);
-  const category = elements.editVideoCategory.value;
+  const title = el.editVideoTitle.value.trim();
+  const url = el.editDriveUrl.value.trim();
+  const fileId = extractDriveFileId(url);
+  const category = el.editVideoCategory.value;
 
-  elements.editFormError.hidden = true;
-  elements.editFormError.textContent = "";
+  el.editFormError.hidden = true;
+  el.editFormError.textContent = "";
 
-  if (!title) {
-    elements.editFormError.textContent = "Please enter a video title.";
-
-    elements.editFormError.hidden = false;
+  if (!title || title.length > 120) {
+    el.editFormError.textContent = "Enter a title up to 120 characters.";
+    el.editFormError.hidden = false;
     return;
   }
 
   if (!fileId) {
-    elements.editFormError.textContent =
-      "Enter a valid HTTPS Google Drive file link.";
-
-    elements.editFormError.hidden = false;
+    el.editFormError.textContent = "Enter a valid Google Drive file link.";
+    el.editFormError.hidden = false;
     return;
   }
 
   if (!categories.includes(category)) {
-    elements.editFormError.textContent = "Choose a valid folder.";
-
-    elements.editFormError.hidden = false;
+    el.editFormError.textContent = "Choose a valid folder.";
+    el.editFormError.hidden = false;
     return;
   }
 
   if (videos.some((item) => item.id !== id && item.fileId === fileId)) {
-    elements.editFormError.textContent =
-      "That Google Drive video is already in your library.";
-
-    elements.editFormError.hidden = false;
+    el.editFormError.textContent = "That video is already in your library.";
+    el.editFormError.hidden = false;
     return;
   }
 
-  const previous = { ...video };
+  const old = { ...video };
 
   video.title = title;
   video.fileId = fileId;
-  video.resourceKey = driveResourceKey(elements.editDriveUrl.value);
+  video.resourceKey = getResourceKey(url);
   video.category = category;
 
   if (!saveLibrary()) {
-    Object.assign(video, previous);
+    Object.assign(video, old);
     return;
   }
 
-  closeDialog(elements.editDialog);
+  closeDialog(el.editDialog);
   render();
 
-  if (currentVideoId === id && elements.playerDialog.open) {
-    elements.playerTitle.textContent = video.title;
-
-    elements.playerCategory.textContent = `Folder: ${video.category} · Google Drive`;
-
-    elements.videoFrame.src = drivePreviewUrl(video.fileId, video.resourceKey);
+  if (currentVideoId === id && el.playerDialog.open) {
+    el.playerTitle.textContent = video.title;
+    el.playerCategory.textContent = `Folder: ${video.category} · Google Drive`;
+    el.videoFrame.src = drivePreviewUrl(video.fileId, video.resourceKey);
   }
 
   showToast("Video details updated.");
 }
 
-/* =========================================================
-   DELETE VIDEO
-   ========================================================= */
+function requestDeleteOne(id) {
+  if (!videos.some((video) => video.id === id)) return;
 
-function requestDeleteVideo(id) {
-  const video = videos.find((item) => item.id === id);
-  if (!video) return;
+  pendingDeleteIds = [id];
+  el.deleteMessage.textContent =
+    "Remove this video from NYXPLAY? The original Google Drive file will not be deleted.";
 
-  pendingDeleteId = id;
-
-  elements.deleteMessage.textContent =
-    `Remove “${video.title}” from your NYXPLAY library? ` +
-    "The original file in Google Drive will not be deleted.";
-
-  if (!elements.deleteDialog.open) {
-    elements.deleteDialog.showModal();
-  }
-}
-
-function confirmDeleteVideo() {
-  const video = videos.find((item) => item.id === pendingDeleteId);
-
-  if (!video) {
-    closeDialog(elements.deleteDialog);
-    return;
-  }
-
-  const oldVideos = videos;
-
-  videos = videos.filter((item) => item.id !== pendingDeleteId);
-
-  if (!saveLibrary()) {
-    videos = oldVideos;
-    return;
-  }
-
-  if (currentVideoId === pendingDeleteId) {
-    closePlayer();
-  }
-
-  currentQueue = currentQueue.filter((id) => id !== pendingDeleteId);
-
-  pendingDeleteId = null;
-
-  closeDialog(elements.deleteDialog);
-  render();
-
-  showToast("Video removed from your library. Drive file unchanged.");
+  if (!el.deleteDialog.open) el.deleteDialog.showModal();
 }
 
 /* =========================================================
-   CUSTOM FOLDER MANAGEMENT
+   FOLDER MANAGEMENT
    ========================================================= */
 
 function openFolderDialog() {
-  elements.folderFormError.hidden = true;
-  elements.folderFormError.textContent = "";
+  el.folderFormError.hidden = true;
+  el.folderFormError.textContent = "";
 
   renderFolderManager();
 
-  if (!elements.folderDialog.open) {
-    elements.folderDialog.showModal();
-  }
-
-  setTimeout(() => elements.newFolderName.focus(), 50);
+  if (!el.folderDialog.open) el.folderDialog.showModal();
 }
 
 function renderFolderManager() {
-  elements.folderManagerList.replaceChildren();
-
-  elements.folderCountLabel.textContent = `${categories.length} FOLDERS`;
+  el.folderManagerList.replaceChildren();
+  el.folderCountLabel.textContent = `${categories.length} FOLDERS`;
 
   categories.forEach((category, index) => {
     const row = document.createElement("div");
     row.className = "folder-manager-row";
 
-    const nameWrap = document.createElement("div");
-    nameWrap.className = "folder-manager-name";
+    const info = document.createElement("div");
+    info.className = "folder-manager-name";
 
     const dot = document.createElement("span");
     dot.className = "folder-dot";
@@ -1013,13 +1092,12 @@ function renderFolderManager() {
 
     const count = document.createElement("span");
     count.className = "folder-manager-count";
+    count.textContent = String(
+      videos.filter((video) => video.category === category).length,
+    );
 
-    count.textContent = videos.filter(
-      (video) => video.category === category,
-    ).length;
-
-    nameWrap.append(dot, name, count);
-    row.append(nameWrap);
+    info.append(dot, name, count);
+    row.append(info);
 
     if (BUILTIN_CATEGORIES.includes(category)) {
       const badge = document.createElement("span");
@@ -1030,63 +1108,58 @@ function renderFolderManager() {
       const actions = document.createElement("div");
       actions.className = "folder-manager-actions";
 
-      const renameButton = document.createElement("button");
-      renameButton.type = "button";
-      renameButton.className = "secondary-button folder-action-button";
-      renameButton.textContent = "Rename";
-      renameButton.addEventListener("click", () => renameFolder(category));
+      const rename = actionButton(
+        "Rename folder",
+        "Rename",
+        "secondary-button folder-action-button",
+        () => renameFolder(category),
+      );
 
-      const deleteButton = document.createElement("button");
-      deleteButton.type = "button";
-      deleteButton.className =
-        "secondary-button folder-action-button delete-action";
-      deleteButton.textContent = "Delete";
-      deleteButton.addEventListener("click", () => deleteFolder(category));
+      const remove = actionButton(
+        "Delete folder",
+        "Delete",
+        "secondary-button folder-action-button delete-action",
+        () => deleteFolder(category),
+      );
 
-      actions.append(renameButton, deleteButton);
+      actions.append(rename, remove);
       row.append(actions);
     }
 
-    elements.folderManagerList.append(row);
+    el.folderManagerList.append(row);
   });
 }
 
-function handleCreateFolder(event) {
+function createFolder(event) {
   event.preventDefault();
 
-  const name = normalizeFolderName(elements.newFolderName.value);
+  const name = normalizeFolderName(el.newFolderName.value);
 
-  elements.folderFormError.hidden = true;
-  elements.folderFormError.textContent = "";
+  el.folderFormError.hidden = true;
+  el.folderFormError.textContent = "";
 
   if (!name) {
-    elements.folderFormError.textContent =
-      "Enter a name up to 30 characters. Avoid slash and angle-bracket characters.";
-
-    elements.folderFormError.hidden = false;
+    el.folderFormError.textContent = "Enter a folder name up to 65 characters.";
+    el.folderFormError.hidden = false;
     return;
   }
 
   if (categories.some((item) => item.toLowerCase() === name.toLowerCase())) {
-    elements.folderFormError.textContent =
-      "A folder with that name already exists.";
-
-    elements.folderFormError.hidden = false;
+    el.folderFormError.textContent = "That folder already exists.";
+    el.folderFormError.hidden = false;
     return;
   }
 
   categories.push(name);
 
   if (!saveCategories()) {
-    categories = categories.filter((item) => item !== name);
+    categories.pop();
     return;
   }
 
-  elements.newFolderName.value = "";
-
+  el.newFolderName.value = "";
   currentView = "library";
   currentCategory = name;
-
   render();
   renderFolderManager();
 
@@ -1096,236 +1169,193 @@ function handleCreateFolder(event) {
 function renameFolder(oldName) {
   if (BUILTIN_CATEGORIES.includes(oldName)) return;
 
-  const raw = window.prompt(`Rename folder “${oldName}” to:`, oldName);
+  const answer = prompt(`Rename “${oldName}” to:`, oldName);
+  if (answer === null) return;
 
-  if (raw === null) return;
-
-  const newName = normalizeFolderName(raw);
-
+  const newName = normalizeFolderName(answer);
   if (!newName) {
-    showToast("Folder name is invalid. Use up to 30 characters.");
+    showToast("That folder name is invalid.");
     return;
   }
 
   if (
     categories.some(
       (item) =>
-        item.toLowerCase() === newName.toLowerCase() && item !== oldName,
+        item !== oldName && item.toLowerCase() === newName.toLowerCase(),
     )
   ) {
     showToast("A folder with that name already exists.");
     return;
   }
 
-  if (newName === oldName) return;
-
-  const previousCategories = [...categories];
-  const previousVideos = videos.map((video) => ({ ...video }));
-
-  categories = categories.map((item) => (item === oldName ? newName : item));
-
-  videos.forEach((video) => {
-    if (video.category === oldName) {
-      video.category = newName;
-    }
-  });
-
-  if (!saveCategories() || !saveLibrary()) {
-    categories = previousCategories;
-    videos = previousVideos;
-
-    saveCategories();
-    saveLibrary();
-    render();
-    renderFolderManager();
-    return;
-  }
-
-  if (currentCategory === oldName) {
-    currentCategory = newName;
-  }
-
-  if (currentVideoId) {
-    const current = videos.find((video) => video.id === currentVideoId);
-
-    if (current) {
-      elements.playerCategory.textContent = `Folder: ${current.category} · Google Drive`;
-    }
-  }
-
-  render();
-  renderFolderManager();
-
-  showToast(`Folder renamed to “${newName}”.`);
-}
-
-function deleteFolder(category) {
-  if (BUILTIN_CATEGORIES.includes(category)) return;
-
-  const inFolder = videos.filter((video) => video.category === category).length;
-
-  const message = inFolder
-    ? `Delete folder “${category}”? ${inFolder} video(s) will move to Other. The Drive files will not be deleted.`
-    : `Delete empty folder “${category}”?`;
-
-  if (!window.confirm(message)) return;
-
   const oldCategories = [...categories];
   const oldVideos = videos.map((video) => ({ ...video }));
 
-  categories = categories.filter((item) => item !== category);
-
+  categories = categories.map((item) => (item === oldName ? newName : item));
   videos.forEach((video) => {
-    if (video.category === category) {
-      video.category = "Other";
-    }
+    if (video.category === oldName) video.category = newName;
   });
 
   if (!saveCategories() || !saveLibrary()) {
     categories = oldCategories;
     videos = oldVideos;
-
     saveCategories();
     saveLibrary();
     render();
-    renderFolderManager();
     return;
   }
 
-  if (currentCategory === category) {
-    currentCategory = "All";
-  }
-
-  if (currentVideoId) {
-    const current = videos.find((video) => video.id === currentVideoId);
-
-    if (current) {
-      elements.playerCategory.textContent = `Folder: ${current.category} · Google Drive`;
-    }
-  }
+  if (currentCategory === oldName) currentCategory = newName;
 
   render();
   renderFolderManager();
+  showToast("Folder renamed.");
+}
 
-  showToast(`Folder “${category}” deleted.`);
+function deleteFolder(category) {
+  if (BUILTIN_CATEGORIES.includes(category)) return;
+
+  const count = videos.filter((video) => video.category === category).length;
+  const message = count
+    ? `Delete “${category}”? ${count} video(s) will move to Other. Drive files are unchanged.`
+    : `Delete empty folder “${category}”?`;
+
+  if (!confirm(message)) return;
+
+  const oldCategories = [...categories];
+  const oldVideos = videos.map((video) => ({ ...video }));
+
+  categories = categories.filter((item) => item !== category);
+  videos.forEach((video) => {
+    if (video.category === category) video.category = "Other";
+  });
+
+  if (!saveCategories() || !saveLibrary()) {
+    categories = oldCategories;
+    videos = oldVideos;
+    saveCategories();
+    saveLibrary();
+    render();
+    return;
+  }
+
+  if (currentCategory === category) currentCategory = "All";
+  render();
+  renderFolderManager();
+  showToast("Folder deleted. Drive files are unchanged.");
 }
 
 /* =========================================================
-   JSON BACKUP AND RESTORE
+   BACKUP AND RESTORE
    ========================================================= */
 
 function exportLibrary() {
-  const backup = {
+  const data = {
     app: "NYXPLAY",
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     categories,
     videos,
   };
 
-  const blob = new Blob([JSON.stringify(backup, null, 2)], {
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
     type: "application/json",
   });
 
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  const date = new Date().toISOString().slice(0, 10);
 
   link.href = url;
-  link.download = `nyxplay-library-${date}.json`;
+  link.download = `nyxplay-library-${new Date().toISOString().slice(0, 10)}.json`;
 
   document.body.append(link);
   link.click();
   link.remove();
 
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-
   showToast("Library backup exported.");
 }
 
-function validateImportedVideo(item, availableCategories) {
-  if (!item || typeof item !== "object") return null;
-
-  const title = typeof item.title === "string" ? item.title.trim() : "";
-
-  const fileId = typeof item.fileId === "string" ? item.fileId.trim() : "";
-
-  if (!title || title.length > 120 || !/^[a-zA-Z0-9_-]+$/.test(fileId)) {
-    return null;
-  }
-
-  const category = availableCategories.includes(item.category)
-    ? item.category
-    : "Other";
-
-  return {
-    id: typeof item.id === "string" && item.id ? item.id : makeId(),
-    fileId,
-    resourceKey: typeof item.resourceKey === "string" ? item.resourceKey : null,
-    title,
-    category,
-    favorite: Boolean(item.favorite),
-    addedAt: Number.isFinite(item.addedAt) ? item.addedAt : Date.now(),
-    lastWatched: Number.isFinite(item.lastWatched) ? item.lastWatched : null,
-  };
-}
-
-async function importLibraryFile(file) {
+async function importLibraryBackup(file) {
   if (!file) return;
 
   if (file.size > MAX_BACKUP_BYTES) {
-    showToast("Backup is larger than 5 MB; choose a smaller JSON file.");
+    showToast("Backup is larger than 5 MB.");
+    el.importFileInput.value = "";
     return;
   }
 
   try {
     const data = JSON.parse(await file.text());
 
-    if (!data || typeof data !== "object" || !Array.isArray(data.videos)) {
-      throw new Error("The JSON file does not look like a NYXPLAY backup.");
+    if (!data || !Array.isArray(data.videos)) {
+      throw new Error("This is not a valid NYXPLAY library backup.");
     }
 
-    const nextCategories = [...categories];
+    const mergedCategories = [...categories];
 
-    const backupCategories = Array.isArray(data.categories)
-      ? data.categories
-      : [];
-
-    for (const value of backupCategories) {
+    (Array.isArray(data.categories) ? data.categories : []).forEach((value) => {
       const name = normalizeFolderName(value);
-
       if (
         name &&
-        !nextCategories.some(
+        !mergedCategories.some(
           (item) => item.toLowerCase() === name.toLowerCase(),
         )
       ) {
-        nextCategories.push(name);
+        mergedCategories.push(name);
       }
-    }
-
-    const candidateVideos = data.videos
-      .map((item) => validateImportedVideo(item, nextCategories))
-      .filter(Boolean);
-
-    const existingFileIds = new Set(videos.map((video) => video.fileId));
-
-    const newVideos = candidateVideos.filter((video) => {
-      if (existingFileIds.has(video.fileId)) return false;
-      existingFileIds.add(video.fileId);
-      return true;
     });
 
-    const previousCategories = [...categories];
-    const previousVideos = [...videos];
+    if (!mergedCategories.includes("Other")) mergedCategories.push("Other");
 
-    categories = nextCategories;
-    videos = [...newVideos, ...videos];
+    const oldCategories = categories;
+    const oldVideos = videos;
+    const oldFileIds = new Set(videos.map((video) => video.fileId));
+
+    categories = mergedCategories;
+
+    const added = [];
+
+    data.videos.forEach((item) => {
+      if (
+        !item ||
+        typeof item.title !== "string" ||
+        typeof item.fileId !== "string" ||
+        !/^[A-Za-z0-9_-]+$/.test(item.fileId) ||
+        oldFileIds.has(item.fileId)
+      ) {
+        return;
+      }
+
+      oldFileIds.add(item.fileId);
+
+      const category = categories.includes(item.category)
+        ? item.category
+        : "Other";
+
+      added.push({
+        id: typeof item.id === "string" ? item.id : makeId(),
+        fileId: item.fileId,
+        resourceKey:
+          typeof item.resourceKey === "string" ? item.resourceKey : null,
+        title: item.title.trim().slice(0, 120) || "Untitled video",
+        category,
+        favorite: Boolean(item.favorite),
+        addedAt: Number.isFinite(item.addedAt) ? item.addedAt : Date.now(),
+        lastWatched: Number.isFinite(item.lastWatched)
+          ? item.lastWatched
+          : null,
+        sourceFolderId: item.sourceFolderId || null,
+        sourceFolderName: item.sourceFolderName || null,
+        sourceFolderPath: item.sourceFolderPath || null,
+      });
+    });
+
+    videos = [...added, ...videos];
 
     if (!saveCategories() || !saveLibrary()) {
-      categories = previousCategories;
-      videos = previousVideos;
-
+      categories = oldCategories;
+      videos = oldVideos;
       saveCategories();
       saveLibrary();
       return;
@@ -1333,131 +1363,116 @@ async function importLibraryFile(file) {
 
     currentView = "library";
     currentCategory = "All";
-    elements.searchInput.value = "";
-
     render();
 
-    showToast(`Backup imported: ${newVideos.length} new video(s) added.`);
+    showToast(`Backup imported: ${added.length} new video(s).`);
   } catch (error) {
-    console.error("Import failed:", error);
-
-    showToast(error.message || "Could not import this backup file.");
+    console.error(error);
+    showToast(error.message || "Could not import this backup.");
   } finally {
-    elements.importFileInput.value = "";
+    el.importFileInput.value = "";
   }
 }
 
 /* =========================================================
-   GOOGLE DRIVE FOLDER IMPORT
+   GOOGLE DRIVE FOLDER IMPORTER
    ========================================================= */
 
-function setFolderImportStatus(message, state = "info") {
-  elements.folderImportStatus.textContent = message;
-  elements.folderImportStatus.dataset.state = state;
-}
-
-function resetFolderImportScan() {
-  folderScanResults = null;
-  elements.folderImportPreview.hidden = true;
-  elements.folderImportList.replaceChildren();
-  elements.folderImportCount.textContent = "";
-  elements.importScannedVideosButton.disabled = true;
-  elements.importScannedVideosButton.textContent = "Import videos";
-}
-
-function updateFolderImportDestinationControl() {
-  if (!elements.createMatchingFolder || !elements.folderImportCategory) {
-    return;
-  }
-
-  elements.folderImportCategory.disabled =
-    elements.createMatchingFolder.checked;
-}
-
 function openFolderImportDialog() {
-  resetFolderImportScan();
+  resetFolderScan();
 
   renderCategoryOptions(
-    elements.folderImportCategory,
-    elements.folderImportCategory.value || "Other",
+    el.folderImportCategory,
+    el.folderImportCategory.value || "Other",
   );
 
   updateFolderImportDestinationControl();
 
-  setFolderImportStatus(
-    "Paste the public folder link and your restricted API key, then scan.",
-    "info",
-  );
+  setFolderStatus("Paste the folder link and API key, then scan.", "info");
 
-  if (!elements.folderImportDialog.open) {
-    elements.folderImportDialog.showModal();
+  if (!el.folderImportDialog.open) {
+    el.folderImportDialog.showModal();
   }
 }
 
-function isLikelyVideoFile(file) {
-  const mimeType = String(file.mimeType || "").toLowerCase();
+function resetFolderScan() {
+  folderScanResults = null;
+  el.folderImportPreview.hidden = true;
+  el.folderImportList.replaceChildren();
+  el.folderImportCount.textContent = "";
+  el.importScannedVideosButton.disabled = true;
+  el.importScannedVideosButton.textContent = "Import videos";
+}
 
-  if (mimeType.startsWith("video/")) return true;
+function setFolderStatus(message, state = "info") {
+  el.folderImportStatus.textContent = message;
+  el.folderImportStatus.dataset.state = state;
+}
+
+function updateFolderImportDestinationControl() {
+  el.folderImportCategory.disabled = el.createMatchingFolder.checked;
+}
+
+function isVideoFile(file) {
+  const mime = String(file.mimeType || "").toLowerCase();
+  if (mime.startsWith("video/")) return true;
 
   return /\.(mp4|m4v|mkv|webm|mov|avi|mpeg|mpg|3gp|ogv|wmv|flv|ts|mts|m2ts)$/i.test(
     file.name || "",
   );
 }
 
-function cleanImportedTitle(fileName) {
+function cleanImportedTitle(filename) {
   return (
-    String(fileName || "Untitled video")
+    String(filename || "Untitled video")
       .replace(/\.[^.]+$/, "")
-      .trim() || "Untitled video"
+      .trim()
+      .slice(0, 120) || "Untitled video"
   );
 }
 
 function sanitizeImportedFolderName(value) {
   let name = String(value || "Imported Drive Folder")
-    .replace(/[<>/\\\u0000-\u001f]/g, "-")
+    .replace(/[<>/\\\u0000-\u001f]/g, " › ")
     .replace(/\s+/g, " ")
     .trim();
 
   if (!name) name = "Imported Drive Folder";
-  if (name.length > 30) name = name.slice(0, 30).trim();
-
-  return name || "Imported Drive Folder";
+  return name.slice(0, 65).trim() || "Imported Drive Folder";
 }
 
 async function driveApiRequest(url) {
-  const response = await fetch(url, { method: "GET" });
-
-  let payload;
+  const response = await fetch(url);
+  let data = null;
 
   try {
-    payload = await response.json();
+    data = await response.json();
   } catch {
-    payload = null;
+    // Non-JSON error handled below.
   }
 
-  if (!response.ok || payload?.error) {
-    const apiMessage =
-      payload?.error?.message || response.statusText || "Unknown API error";
+  if (!response.ok || data?.error) {
+    const message = data?.error?.message || response.statusText;
+    const lower = String(message).toLowerCase();
 
-    const lower = apiMessage.toLowerCase();
-
-    if (
-      response.status === 403 &&
-      (lower.includes("referer") || lower.includes("referrer"))
-    ) {
+    if (response.status === 404) {
       throw new Error(
-        "Google rejected the key's website restriction. Allow https://harrysan07.github.io/* in the key settings and retry on the live website.",
+        "Folder not found. Check its URL and sharing permissions.",
+      );
+    }
+
+    if (response.status === 401 || lower.includes("api key not valid")) {
+      throw new Error(
+        "Google rejected the API key. Check the key and API restrictions.",
       );
     }
 
     if (
       response.status === 403 &&
-      (lower.includes("api has not been used") ||
-        lower.includes("disabled") ||
-        lower.includes("service_disabled"))
+      (lower.includes("referrer") || lower.includes("referer"))
     ) {
       throw new Error(
-        "Google Drive API is not enabled for this Cloud project yet. Enable it under APIs & Services → Library, then retry.",
+        "The API key's website restriction rejected this origin.",
       );
     }
 
@@ -1465,38 +1480,16 @@ async function driveApiRequest(url) {
       response.status === 403 &&
       (lower.includes("quota") || lower.includes("rate limit"))
     ) {
-      throw new Error(
-        "Google Drive API quota or rate limit reached. Wait a little and try again.",
-      );
+      throw new Error("The Google Drive API quota or rate limit was reached.");
     }
 
-    if (response.status === 404) {
-      throw new Error(
-        "Google could not find that folder. Check the URL and ensure the target folder itself is shared as Anyone with the link — Viewer.",
-      );
-    }
-
-    if (response.status === 401 || lower.includes("api key not valid")) {
-      throw new Error(
-        "The API key was rejected. Check it, confirm Google Drive API is enabled, and verify the allowed website matches this GitHub Pages site.",
-      );
-    }
-
-    if (response.status === 403) {
-      throw new Error(
-        `Google denied access to this folder. Confirm the target parent folder is shared as Anyone with the link — Viewer. Details: ${apiMessage}`,
-      );
-    }
-
-    throw new Error(
-      `Google Drive API error (${response.status}): ${apiMessage}`,
-    );
+    throw new Error(`Google Drive API error (${response.status}): ${message}`);
   }
 
-  return payload;
+  return data;
 }
 
-async function getPublicFolderInfo(folderId, apiKey) {
+async function getFolderInfo(folderId, apiKey) {
   const url = new URL(
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}`,
   );
@@ -1505,11 +1498,11 @@ async function getPublicFolderInfo(folderId, apiKey) {
   url.searchParams.set("fields", "id,name,mimeType,resourceKey");
   url.searchParams.set("supportsAllDrives", "true");
 
-  return driveApiRequest(url.toString());
+  return driveApiRequest(url);
 }
 
-async function listPublicFolderChildren(folderId, apiKey) {
-  const allFiles = [];
+async function listFolderChildren(folderId, apiKey) {
+  const all = [];
   let pageToken = null;
 
   do {
@@ -1519,512 +1512,511 @@ async function listPublicFolderChildren(folderId, apiKey) {
     url.searchParams.set("q", `'${folderId}' in parents and trashed = false`);
     url.searchParams.set("pageSize", "1000");
     url.searchParams.set("orderBy", "name_natural");
-
     url.searchParams.set(
       "fields",
       "nextPageToken,files(id,name,mimeType,resourceKey,shortcutDetails(targetId,targetMimeType))",
     );
-
     url.searchParams.set("supportsAllDrives", "true");
     url.searchParams.set("includeItemsFromAllDrives", "true");
 
-    if (pageToken) {
-      url.searchParams.set("pageToken", pageToken);
-    }
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
 
-    const data = await driveApiRequest(url.toString());
-
-    if (Array.isArray(data.files)) {
-      allFiles.push(...data.files);
-    }
+    const data = await driveApiRequest(url);
+    if (Array.isArray(data.files)) all.push(...data.files);
 
     pageToken = data.nextPageToken || null;
   } while (pageToken);
 
-  return allFiles;
+  return all;
 }
 
-async function scanPublicDriveFolder(rootFolderId, apiKey, includeSubfolders) {
-  const rootInfo = await getPublicFolderInfo(rootFolderId, apiKey);
+async function scanDriveFolder(rootId, apiKey, includeNested) {
+  const root = await getFolderInfo(rootId, apiKey);
 
-  if (rootInfo.mimeType !== "application/vnd.google-apps.folder") {
-    throw new Error(
-      "This link does not point to a Google Drive folder. Use a link containing /folders/ and the folder ID.",
-    );
+  if (root.mimeType !== "application/vnd.google-apps.folder") {
+    throw new Error("The supplied link does not point to a Drive folder.");
   }
 
-  const queue = [
-    {
-      id: rootFolderId,
-      path: rootInfo.name || "",
-    },
-  ];
-
+  const queue = [{ id: rootId, path: root.name || "Drive Folder" }];
   const visited = new Set();
-  const videosFound = [];
-
-  let childFolderCount = 0;
-  let skippedShortcuts = 0;
+  const found = [];
   let truncated = false;
+  let skippedShortcuts = 0;
 
   while (queue.length) {
-    if (visited.size >= MAX_DRIVE_SCAN_FOLDERS) {
+    if (
+      visited.size >= MAX_FOLDERS_TO_SCAN ||
+      found.length >= MAX_VIDEOS_TO_SCAN
+    ) {
       truncated = true;
       break;
     }
 
     const current = queue.shift();
-
     if (visited.has(current.id)) continue;
+
     visited.add(current.id);
 
-    setFolderImportStatus(
-      `Scanning “${current.path || rootInfo.name}”… ${videosFound.length} video(s) found in ${visited.size} folder(s).`,
+    setFolderStatus(
+      `Scanning ${current.path} — ${found.length} video(s) found.`,
       "working",
     );
 
-    const children = await listPublicFolderChildren(current.id, apiKey);
+    const children = await listFolderChildren(current.id, apiKey);
 
     for (const item of children) {
-      if (
-        !item ||
-        typeof item.id !== "string" ||
-        typeof item.name !== "string"
-      ) {
-        continue;
-      }
+      if (!item?.id || !item?.name) continue;
 
       if (item.mimeType === "application/vnd.google-apps.folder") {
-        childFolderCount += 1;
-
-        if (includeSubfolders) {
+        if (includeNested) {
           queue.push({
             id: item.id,
-            path: current.path ? `${current.path} / ${item.name}` : item.name,
+            path: `${current.path} / ${item.name}`,
           });
         }
-
         continue;
       }
 
-      // Shortcuts can point outside the selected folder.
+      // Shortcuts may point outside the chosen folder; skip them for now.
       if (item.mimeType === "application/vnd.google-apps.shortcut") {
-        skippedShortcuts += 1;
+        skippedShortcuts++;
         continue;
       }
 
-      if (isLikelyVideoFile(item)) {
-        videosFound.push({
+      if (isVideoFile(item)) {
+        found.push({
           fileId: item.id,
           resourceKey: item.resourceKey || null,
           name: item.name,
           mimeType: item.mimeType || "",
-          folderPath: current.path || rootInfo.name || "",
+          folderPath: current.path,
         });
 
-        if (videosFound.length >= MAX_DRIVE_SCAN_VIDEOS) {
+        if (found.length >= MAX_VIDEOS_TO_SCAN) {
           truncated = true;
           break;
         }
       }
     }
-
-    if (truncated) break;
   }
 
   return {
-    rootFolderId,
-    rootFolderName: rootInfo.name || "Imported Drive Folder",
-    rootResourceKey: rootInfo.resourceKey || null,
-    videos: videosFound,
+    rootFolderId: rootId,
+    rootFolderName: root.name || "Drive Folder",
+    videos: found,
     scannedFolders: visited.size,
-    childFolderCount,
-    skippedShortcuts,
     truncated,
-    includeSubfolders,
+    skippedShortcuts,
+    includeNested,
   };
-}
-
-function showFolderScanPreview(result) {
-  elements.folderImportList.replaceChildren();
-
-  const candidates = result.videos;
-
-  const existingIds = new Set(videos.map((video) => video.fileId));
-
-  const newCount = candidates.filter(
-    (file) => !existingIds.has(file.fileId),
-  ).length;
-
-  const duplicateCount = candidates.length - newCount;
-
-  elements.folderImportCount.textContent = `${candidates.length} VIDEOS`;
-
-  const previewLimit = 100;
-
-  candidates.slice(0, previewLimit).forEach((file) => {
-    const item = document.createElement("li");
-    item.textContent = file.name;
-
-    item.title = file.folderPath
-      ? `${file.folderPath} / ${file.name}`
-      : file.name;
-
-    elements.folderImportList.append(item);
-  });
-
-  if (candidates.length > previewLimit) {
-    const more = document.createElement("li");
-
-    more.className = "drive-import-more";
-    more.textContent = `…and ${candidates.length - previewLimit} more video(s)`;
-
-    elements.folderImportList.append(more);
-  }
-
-  elements.folderImportPreview.hidden = false;
-
-  elements.importScannedVideosButton.disabled = newCount === 0;
-
-  elements.importScannedVideosButton.textContent =
-    newCount > 0
-      ? `Import ${newCount} video${newCount === 1 ? "" : "s"}`
-      : "Nothing new to import";
-
-  let status = `${candidates.length} video(s) found · ${newCount} new · ${duplicateCount} already in library. Scanned ${result.scannedFolders} folder(s).`;
-
-  if (result.truncated) {
-    status += ` Safety limit reached (${MAX_DRIVE_SCAN_FOLDERS} folders or ${MAX_DRIVE_SCAN_VIDEOS} videos); some items may remain.`;
-  }
-
-  if (!result.includeSubfolders && result.childFolderCount > 0) {
-    status += ` ${result.childFolderCount} subfolder(s) were not opened.`;
-  }
-
-  if (result.skippedShortcuts > 0) {
-    status += ` ${result.skippedShortcuts} shortcut(s) skipped.`;
-  }
-
-  setFolderImportStatus(status, candidates.length ? "success" : "info");
 }
 
 async function handleScanDriveFolder() {
   if (folderScanBusy) return;
 
-  const folderUrl = elements.driveFolderUrl.value.trim();
-  const apiKey = elements.driveApiKey.value.trim();
-  const folderId = extractDriveFolderId(folderUrl);
+  resetFolderScan();
 
-  resetFolderImportScan();
+  const folderUrl = el.driveFolderUrl.value.trim();
+  const folderId = extractDriveFolderId(folderUrl);
+  const apiKey = el.driveApiKey.value.trim();
 
   if (!folderId) {
-    setFolderImportStatus(
-      "Enter a valid Google Drive folder URL containing /folders/ and its folder ID.",
-      "error",
-    );
-
-    elements.driveFolderUrl.focus();
+    setFolderStatus("Paste a valid Google Drive folder link.", "error");
     return;
   }
 
   if (!apiKey) {
-    setFolderImportStatus(
-      "Paste your restricted Google Drive API key to scan this folder.",
-      "error",
-    );
-
-    elements.driveApiKey.focus();
+    setFolderStatus("Paste your restricted API key for this scan.", "error");
     return;
   }
 
   folderScanBusy = true;
-  elements.scanDriveFolderButton.disabled = true;
-  elements.scanDriveFolderButton.textContent = "Scanning…";
-
-  setFolderImportStatus("Connecting to Google Drive…", "working");
+  el.scanDriveFolderButton.disabled = true;
+  el.scanDriveFolderButton.textContent = "Scanning…";
+  setFolderStatus("Connecting to Google Drive…", "working");
 
   try {
-    const result = await scanPublicDriveFolder(
+    folderScanResults = await scanDriveFolder(
       folderId,
       apiKey,
-      elements.scanNestedFolders.checked,
+      el.scanNestedFolders.checked,
     );
 
-    folderScanResults = result;
-    showFolderScanPreview(result);
-
-    if (result.videos.length === 0) {
-      setFolderImportStatus(
-        "Folder access succeeded, but no recognizable video files were listed. Check that the target folder is shared as Anyone with the link — Viewer, or open the subfolder containing videos and scan it directly.",
-        "info",
-      );
-    }
+    showFolderScanPreview(folderScanResults);
   } catch (error) {
-    console.error("Drive folder scan failed:", error);
-
+    console.error(error);
     folderScanResults = null;
-    resetFolderImportScan();
-
-    setFolderImportStatus(
-      error.message || "Could not scan this Drive folder.",
-      "error",
-    );
+    resetFolderScan();
+    setFolderStatus(error.message || "Could not scan this folder.", "error");
   } finally {
     folderScanBusy = false;
-    elements.scanDriveFolderButton.disabled = false;
-    elements.scanDriveFolderButton.textContent = "Scan folder";
+    el.scanDriveFolderButton.disabled = false;
+    el.scanDriveFolderButton.textContent = "Scan folder";
   }
 }
 
-function getFolderNameForImport(scan) {
-  const safeName = sanitizeImportedFolderName(scan.rootFolderName);
+function showFolderScanPreview(result) {
+  el.folderImportList.replaceChildren();
 
-  return (
-    categories.find(
-      (category) => category.toLowerCase() === safeName.toLowerCase(),
-    ) || safeName
+  const known = new Set(videos.map((video) => video.fileId));
+  const newCount = result.videos.filter(
+    (file) => !known.has(file.fileId),
+  ).length;
+  const duplicates = result.videos.length - newCount;
+
+  el.folderImportCount.textContent = `${result.videos.length} VIDEOS`;
+
+  result.videos.slice(0, 120).forEach((file) => {
+    const li = document.createElement("li");
+    li.textContent = `${file.folderPath} › ${file.name}`;
+    li.title = `${file.folderPath} / ${file.name}`;
+    el.folderImportList.append(li);
+  });
+
+  if (result.videos.length > 120) {
+    const li = document.createElement("li");
+    li.textContent = `…and ${result.videos.length - 120} more videos`;
+    el.folderImportList.append(li);
+  }
+
+  el.folderImportPreview.hidden = false;
+  el.importScannedVideosButton.disabled = newCount === 0;
+  el.importScannedVideosButton.textContent = newCount
+    ? `Import ${newCount} video(s)`
+    : "Nothing new to import";
+
+  let message =
+    `${result.videos.length} video(s) found · ${newCount} new · ` +
+    `${duplicates} duplicate(s) · ${result.scannedFolders} folder(s) scanned.`;
+
+  if (result.skippedShortcuts) {
+    message += ` ${result.skippedShortcuts} shortcut(s) were skipped.`;
+  }
+  if (result.truncated) {
+    message += " Scan safety limit reached; some files may remain unscanned.";
+  }
+  if (!result.includeNested) {
+    message += " Subfolders were not scanned.";
+  }
+
+  setFolderStatus(
+    result.videos.length ? message : "No recognizable video files were listed.",
+    result.videos.length ? "success" : "info",
   );
 }
 
 function importScannedDriveVideos() {
   if (!folderScanResults) {
-    showToast("Scan a Drive folder before importing.");
+    showToast("Scan a folder first.");
     return;
   }
 
-  const previousCategories = [...categories];
-  const previousVideos = videos;
+  const oldCategories = [...categories];
+  const oldVideos = videos;
 
-  const autoCreateFolder = elements.createMatchingFolder.checked;
+  const preserveGroups = el.createMatchingFolder.checked;
+  const selectedDestination = el.folderImportCategory.value || "Other";
+  const rootName = folderScanResults.rootFolderName || "Drive Folder";
 
-  let destination = autoCreateFolder
-    ? getFolderNameForImport(folderScanResults)
-    : elements.folderImportCategory.value;
+  const existingIds = new Set(videos.map((video) => video.fileId));
+  const uniqueFiles = folderScanResults.videos.filter((file) => {
+    if (existingIds.has(file.fileId)) return false;
+    existingIds.add(file.fileId);
+    return true;
+  });
 
-  if (!destination) destination = "Other";
-
-  if (
-    !categories.some(
-      (category) => category.toLowerCase() === destination.toLowerCase(),
-    )
-  ) {
-    categories.push(destination);
-  } else {
-    destination = categories.find(
-      (category) => category.toLowerCase() === destination.toLowerCase(),
-    );
+  if (!uniqueFiles.length) {
+    showToast("All scanned videos are already in your library.");
+    return;
   }
 
-  const knownIds = new Set(videos.map((video) => video.fileId));
+  function categoryForPath(file) {
+    let path = String(file.folderPath || rootName).trim();
 
-  const candidates = folderScanResults.videos.filter(
-    (file) => !knownIds.has(file.fileId),
-  );
+    if (path === rootName) {
+      path = rootName;
+    } else if (path.startsWith(`${rootName} / `)) {
+      path = path.slice(rootName.length + 3);
+    }
 
-  if (candidates.length === 0) {
-    showToast("All scanned videos are already in your library.");
+    const desired = sanitizeImportedFolderName(
+      path
+        .split(" / ")
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join(" › "),
+    );
+
+    const existing = categories.find(
+      (category) => category.toLowerCase() === desired.toLowerCase(),
+    );
+
+    if (existing) return existing;
+
+    let name = desired;
+    let suffix = 2;
+
+    while (
+      categories.some(
+        (category) => category.toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      const ending = ` (${suffix++})`;
+      name = desired.slice(0, 65 - ending.length) + ending;
+    }
+
+    categories.push(name);
+    return name;
+  }
+
+  if (!preserveGroups && !categories.includes(selectedDestination)) {
+    showToast("Choose a valid destination folder.");
     return;
   }
 
   const now = Date.now();
 
-  const imported = candidates.map((file, index) => ({
+  const imported = uniqueFiles.map((file, index) => ({
     id: makeId(),
     fileId: file.fileId,
     resourceKey: file.resourceKey || null,
     title: cleanImportedTitle(file.name),
-    category: destination,
+    category: preserveGroups ? categoryForPath(file) : selectedDestination,
     favorite: false,
     addedAt: now + index,
     lastWatched: null,
     sourceFolderId: folderScanResults.rootFolderId,
-    sourceFolderName: folderScanResults.rootFolderName,
-    sourceFolderPath: file.folderPath || "",
+    sourceFolderName: rootName,
+    sourceFolderPath: file.folderPath || rootName,
   }));
 
   videos = [...imported, ...videos];
 
   if (!saveCategories() || !saveLibrary()) {
-    categories = previousCategories;
-    videos = previousVideos;
-
+    categories = oldCategories;
+    videos = oldVideos;
     saveCategories();
     saveLibrary();
     return;
   }
 
   currentView = "library";
-  currentCategory = destination;
-  elements.searchInput.value = "";
+  currentCategory = preserveGroups ? imported[0].category : selectedDestination;
+  selectionMode = false;
+  selectedVideoIds.clear();
+  el.searchInput.value = "";
 
   render();
+  closeDialog(el.folderImportDialog);
+  el.driveApiKey.value = "";
 
-  closeDialog(elements.folderImportDialog);
-  elements.driveApiKey.value = "";
-
-  showToast(`Imported ${imported.length} video(s) into “${destination}”.`);
+  const groupCount = new Set(imported.map((video) => video.category)).size;
+  showToast(
+    `Imported ${imported.length} video(s) across ${groupCount} folder group(s).`,
+  );
 }
 
 /* =========================================================
-   EVENT LISTENERS
+   PLAYER
    ========================================================= */
 
+function openPlayer(id, keepQueue = false) {
+  const video = videos.find((item) => item.id === id);
+  if (!video) return;
+
+  if (!keepQueue) {
+    currentQueue = getVisibleVideos().map((item) => item.id);
+    if (!currentQueue.includes(id)) currentQueue.unshift(id);
+  }
+
+  currentVideoId = id;
+  video.lastWatched = Date.now();
+  saveLibrary();
+
+  el.playerTitle.textContent = video.title;
+  el.playerCategory.textContent = `Folder: ${video.category} · Google Drive`;
+  el.videoFrame.src = drivePreviewUrl(video.fileId, video.resourceKey);
+
+  el.openDriveButton.onclick = () => {
+    window.open(
+      driveViewUrl(video.fileId, video.resourceKey),
+      "_blank",
+      "noopener,noreferrer",
+    );
+  };
+
+  const index = currentQueue.indexOf(id);
+  const hasNext = index >= 0 && index < currentQueue.length - 1;
+
+  el.nextVideoButton.disabled = !hasNext;
+  el.nextVideoButton.textContent = hasNext ? "Next video →" : "End of list";
+
+  if (!el.playerDialog.open) el.playerDialog.showModal();
+  render();
+}
+
+function playNext() {
+  const index = currentQueue.indexOf(currentVideoId);
+  if (index < 0 || index >= currentQueue.length - 1) {
+    showToast("You've reached the end of this list.");
+    return;
+  }
+  openPlayer(currentQueue[index + 1], true);
+}
+
+function closePlayer() {
+  el.videoFrame.src = "about:blank";
+  closeDialog(el.playerDialog);
+  currentVideoId = null;
+}
+
+/* =========================================================
+   GENERIC EVENT HELPERS
+   ========================================================= */
+
+function closeDialogFromButton(button) {
+  const dialog = document.getElementById(button.dataset.closeDialog);
+  if (dialog) {
+    if (dialog === el.deleteDialog) pendingDeleteIds = [];
+    closeDialog(dialog);
+  }
+}
+
 function wireEvents() {
-  elements.themeButton.addEventListener("click", cycleTheme);
+  el.themeButton.addEventListener("click", toggleTheme);
 
-  $("#addVideoButton").addEventListener("click", openAddDialog);
+  el.addVideoButton.addEventListener("click", openSourceDialog);
+  el.heroActionButton.addEventListener("click", openSourceDialog);
+  el.emptyAddButton.addEventListener("click", openSourceDialog);
+  el.sourceForm.addEventListener("submit", detectSource);
 
-  $("#heroActionButton").addEventListener("click", openAddDialog);
+  el.homeImportFolderButton.addEventListener("click", openFolderImportDialog);
+  el.importDriveFolderButton.addEventListener("click", openFolderImportDialog);
 
-  $("#emptyAddButton").addEventListener("click", openAddDialog);
+  el.addForm.addEventListener("submit", handleAddVideo);
+  el.editForm.addEventListener("submit", handleEditVideo);
 
-  elements.addForm.addEventListener("submit", handleAddVideo);
+  el.manageFoldersButton.addEventListener("click", openFolderDialog);
+  el.createFolderForm.addEventListener("submit", createFolder);
 
-  elements.editForm.addEventListener("submit", handleEditVideo);
-
-  elements.manageFoldersButton.addEventListener("click", openFolderDialog);
-
-  elements.createFolderForm.addEventListener("submit", handleCreateFolder);
-
-  elements.exportLibraryButton.addEventListener("click", exportLibrary);
-
-  elements.importLibraryButton.addEventListener("click", () =>
-    elements.importFileInput.click(),
+  el.exportLibraryButton.addEventListener("click", exportLibrary);
+  el.importLibraryButton.addEventListener("click", () =>
+    el.importFileInput.click(),
   );
+  el.importFileInput.addEventListener("change", (event) => {
+    if (event.target.files?.[0]) importLibraryBackup(event.target.files[0]);
+  });
 
-  elements.importDriveFolderButton.addEventListener(
-    "click",
-    openFolderImportDialog,
-  );
+  el.selectItemsButton.addEventListener("click", () => {
+    selectionMode ? exitSelectionMode() : enterSelectionMode();
+  });
+  el.selectAllVisible.addEventListener("change", selectAllVisible);
+  el.bulkMoveButton.addEventListener("click", moveSelectedVideos);
+  el.bulkDeleteButton.addEventListener("click", requestBulkDelete);
+  el.exitSelectionButton.addEventListener("click", exitSelectionMode);
 
-  elements.scanDriveFolderButton.addEventListener(
-    "click",
-    handleScanDriveFolder,
-  );
-
-  elements.importScannedVideosButton.addEventListener(
+  el.scanDriveFolderButton.addEventListener("click", handleScanDriveFolder);
+  el.importScannedVideosButton.addEventListener(
     "click",
     importScannedDriveVideos,
   );
-
-  elements.cancelFolderImportButton.addEventListener("click", () =>
-    closeDialog(elements.folderImportDialog),
+  el.cancelFolderImportButton.addEventListener("click", () =>
+    closeDialog(el.folderImportDialog),
   );
-
-  elements.createMatchingFolder.addEventListener(
-    "change",
-    updateFolderImportDestinationControl,
-  );
-
-  elements.folderImportDialog.addEventListener("close", () => {
-    // Never save the API key in local storage or library backups.
-    elements.driveApiKey.value = "";
+  el.createMatchingFolder.addEventListener("change", () => {
+    updateFolderImportDestinationControl();
   });
 
-  elements.importFileInput.addEventListener("change", (event) => {
-    const file = event.target.files?.[0];
-    if (file) importLibraryFile(file);
-  });
-
-  elements.sortSelect.addEventListener("change", render);
-
-  elements.confirmDeleteButton.addEventListener("click", confirmDeleteVideo);
-
-  elements.cancelDeleteButton.addEventListener("click", () => {
-    pendingDeleteId = null;
-    closeDialog(elements.deleteDialog);
-  });
-
-  $$("[data-close-dialog]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const dialog = document.getElementById(button.dataset.closeDialog);
-
-      if (dialog === elements.deleteDialog) {
-        pendingDeleteId = null;
-      }
-
-      closeDialog(dialog);
-    });
+  el.sortSelect.addEventListener("change", render);
+  el.searchInput.addEventListener("input", () => {
+    if (el.searchInput.value.trim() && currentView === "home") {
+      currentView = "library";
+      currentCategory = "All";
+    }
+    render();
   });
 
   $$(".nav-item").forEach((button) => {
-    button.addEventListener("click", () => {
-      currentView = button.dataset.view;
-      currentCategory = "All";
-
-      render();
-
-      document.body.classList.remove("sidebar-open");
-    });
+    button.addEventListener("click", () => goToView(button.dataset.view));
   });
 
-  elements.sidebarFolders.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-category]");
-
-    if (button) {
-      currentView = "library";
-      setCategory(button.dataset.category);
-
-      document.body.classList.remove("sidebar-open");
-    }
+  $$("[data-go-view]").forEach((button) => {
+    button.addEventListener("click", () => goToView(button.dataset.goView));
   });
 
-  elements.categoryFilters.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-category]");
+  $("#brandHome").addEventListener("click", (event) => {
+    event.preventDefault();
+    goToView("home");
+  });
 
+  el.sidebarFolders.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-category]");
     if (button) setCategory(button.dataset.category);
   });
 
-  elements.searchInput.addEventListener("input", render);
+  el.categoryFilters.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-category]");
+    if (button) setCategory(button.dataset.category);
+  });
+
+  el.confirmDeleteButton.addEventListener("click", confirmDelete);
+  el.cancelDeleteButton.addEventListener("click", () => {
+    pendingDeleteIds = [];
+    closeDialog(el.deleteDialog);
+  });
 
   $("#closePlayerButton").addEventListener("click", closePlayer);
-
-  elements.nextVideoButton.addEventListener("click", playNext);
+  el.nextVideoButton.addEventListener("click", playNext);
 
   $("#mobileMenu").addEventListener("click", () => {
     document.body.classList.toggle("sidebar-open");
   });
 
+  $$("[data-close-dialog]").forEach((button) => {
+    button.addEventListener("click", () => closeDialogFromButton(button));
+  });
+
   [
-    elements.addDialog,
-    elements.editDialog,
-    elements.deleteDialog,
-    elements.folderDialog,
-    elements.folderImportDialog,
-    elements.playerDialog,
+    el.sourceDialog,
+    el.addDialog,
+    el.editDialog,
+    el.deleteDialog,
+    el.folderDialog,
+    el.folderImportDialog,
+    el.playerDialog,
   ].forEach((dialog) => {
     dialog.addEventListener("click", (event) => {
       if (event.target !== dialog) return;
-
-      if (dialog === elements.playerDialog) {
-        closePlayer();
-      } else {
-        if (dialog === elements.deleteDialog) {
-          pendingDeleteId = null;
-        }
-
+      if (dialog === el.playerDialog) closePlayer();
+      else {
+        if (dialog === el.deleteDialog) pendingDeleteIds = [];
         closeDialog(dialog);
       }
     });
   });
 
+  el.folderImportDialog.addEventListener("close", () => {
+    // Do not retain the key in the page after the dialog closes.
+    el.driveApiKey.value = "";
+  });
+
   document.addEventListener("keydown", (event) => {
-    const activeTag = document.activeElement?.tagName;
+    const tag = document.activeElement?.tagName;
+    const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(tag);
 
-    const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(activeTag);
-
-    const anyDialogOpen = [
-      elements.addDialog,
-      elements.editDialog,
-      elements.deleteDialog,
-      elements.folderDialog,
-      elements.folderImportDialog,
-      elements.playerDialog,
+    const modalOpen = [
+      el.sourceDialog,
+      el.addDialog,
+      el.editDialog,
+      el.deleteDialog,
+      el.folderDialog,
+      el.folderImportDialog,
+      el.playerDialog,
     ].some((dialog) => dialog.open);
 
-    if (event.key === "/" && !typing && !anyDialogOpen) {
+    if (event.key === "/" && !typing && !modalOpen) {
       event.preventDefault();
-      elements.searchInput.focus();
+      el.searchInput.focus();
     }
 
     if (event.key === "Escape") {
@@ -2034,86 +2026,13 @@ function wireEvents() {
 }
 
 /* =========================================================
-   ADD A SINGLE VIDEO
+   START
    ========================================================= */
 
-function handleAddVideo(event) {
-  event.preventDefault();
-
-  const title = elements.videoTitle.value.trim();
-  const rawUrl = elements.driveUrl.value.trim();
-  const category = elements.videoCategory.value;
-  const fileId = extractDriveFileId(rawUrl);
-
-  elements.formError.hidden = true;
-  elements.formError.textContent = "";
-
-  if (!title) {
-    elements.formError.textContent = "Please enter a video title.";
-
-    elements.formError.hidden = false;
-    return;
-  }
-
-  if (!fileId) {
-    elements.formError.textContent =
-      "Enter a valid HTTPS Google Drive file link.";
-
-    elements.formError.hidden = false;
-    return;
-  }
-
-  if (!categories.includes(category)) {
-    elements.formError.textContent = "Please choose a valid folder.";
-
-    elements.formError.hidden = false;
-    return;
-  }
-
-  if (videos.some((video) => video.fileId === fileId)) {
-    elements.formError.textContent =
-      "That Google Drive video is already in your library.";
-
-    elements.formError.hidden = false;
-    return;
-  }
-
-  const video = {
-    id: makeId(),
-    fileId,
-    resourceKey: driveResourceKey(rawUrl),
-    title,
-    category,
-    favorite: false,
-    addedAt: Date.now(),
-    lastWatched: null,
-  };
-
-  videos.unshift(video);
-
-  if (!saveLibrary()) {
-    videos = videos.filter((item) => item.id !== video.id);
-    return;
-  }
-
-  elements.addForm.reset();
-  renderCategoryOptions(elements.videoCategory, "Other");
-
-  closeDialog(elements.addDialog);
-
-  currentView = "library";
-  currentCategory = "All";
-  elements.searchInput.value = "";
-
-  render();
-
-  showToast("Video added to your library.");
+function closeDialog(dialog) {
+  if (dialog?.open) dialog.close();
 }
 
-/* =========================================================
-   START THE APPLICATION
-   ========================================================= */
-
 wireEvents();
-applyTheme(getSavedTheme());
+applyTheme(localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark");
 render();

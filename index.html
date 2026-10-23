@@ -4,33 +4,31 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#101116" />
-    <meta name="description" content="NYXPLAY — your personal video library." />
+    <meta name="description" content="NYXPLAY — your personal media library" />
     <title>NYXPLAY — Your Media Universe</title>
     <link rel="stylesheet" href="style.css" />
     <script src="script.js" defer></script>
   </head>
-
   <body data-theme="dark">
     <div class="app-shell">
-      <!-- SIDEBAR -->
       <aside class="sidebar">
-        <a class="brand" href="#" aria-label="NYXPLAY home">
+        <a class="brand" href="#" id="brandHome" aria-label="NYXPLAY home">
           <span class="brand-mark">N<span>✦</span></span>
           <span>NYX<span class="brand-light">PLAY</span></span>
         </a>
 
-        <div class="sidebar-label">LIBRARY</div>
-
+        <div class="sidebar-label">NAVIGATION</div>
         <nav class="main-nav" aria-label="Main navigation">
-          <button type="button" class="nav-item active" data-view="library">
-            <span>▦</span> All videos
+          <button class="nav-item active" data-view="home" type="button">
+            <span>⌂</span> Home
           </button>
-
-          <button type="button" class="nav-item" data-view="recent">
+          <button class="nav-item" data-view="library" type="button">
+            <span>▦</span> Library
+          </button>
+          <button class="nav-item" data-view="recent" type="button">
             <span>◷</span> Recently watched
           </button>
-
-          <button type="button" class="nav-item" data-view="favorites">
+          <button class="nav-item" data-view="favorites" type="button">
             <span>♡</span> Favorites
           </button>
         </nav>
@@ -39,7 +37,6 @@
           <span class="sidebar-label">YOUR FOLDERS</span>
           <span class="folder-symbol">▤</span>
         </div>
-
         <nav
           id="sidebarFolders"
           class="folder-nav"
@@ -56,9 +53,7 @@
         </div>
       </aside>
 
-      <!-- MAIN CONTENT -->
       <main class="main-content">
-        <!-- TOP NAVIGATION -->
         <header class="topbar">
           <button
             id="mobileMenu"
@@ -68,10 +63,8 @@
           >
             ☰
           </button>
-
           <div class="breadcrumb">
-            MY SPACE <span>/</span>
-            <strong id="pageLabel">All videos</strong>
+            MY SPACE <span>/</span> <strong id="pageLabel">Home</strong>
           </div>
 
           <div class="topbar-actions">
@@ -82,120 +75,183 @@
                 type="search"
                 placeholder="Search your library..."
                 autocomplete="off"
-                aria-label="Search your video library"
+                aria-label="Search your library"
               />
               <kbd>/</kbd>
             </label>
-
-            <!-- DARK / LIGHT MODE -->
             <button
               id="themeButton"
               class="secondary-button theme-button"
               type="button"
-              title="Switch to light mode"
-              aria-label="Switch to light mode"
             >
               <span class="theme-icon" aria-hidden="true">☀</span>
               <span id="themeButtonLabel">Light mode</span>
             </button>
-
             <button id="addVideoButton" class="primary-button" type="button">
-              <span>＋</span> Add video
+              <span>＋</span> Select
             </button>
           </div>
         </header>
 
-        <!-- HERO -->
-        <section class="hero">
-          <div class="hero-copy">
-            <div class="eyebrow">
-              <span class="live-dot"></span>
-              YOUR PERSONAL MEDIA HUB
+        <!-- HOME: no video cards on this page -->
+        <section id="homeOverview" class="home-overview">
+          <section class="hero">
+            <div class="hero-copy">
+              <div class="eyebrow">
+                <span class="live-dot"></span> YOUR PERSONAL MEDIA HUB
+              </div>
+              <h1>Your world.<br /><span>Your watchlist.</span></h1>
+              <p>
+                Your videos, your folders, your rules. Bring your favorite media
+                sources into one simple library.
+              </p>
+              <div class="hero-actions">
+                <button
+                  id="heroActionButton"
+                  class="primary-button hero-button"
+                  type="button"
+                >
+                  <span>＋</span> Add or import source
+                </button>
+                <span class="hero-note"
+                  >A little corner of the internet, just for you.</span
+                >
+              </div>
             </div>
+            <div class="hero-art" aria-hidden="true">
+              <div class="orbit orbit-one"></div>
+              <div class="orbit orbit-two"></div>
+              <div class="art-glow"></div>
+              <div class="play-emblem">▶</div>
+              <div class="art-tag tag-top">YOUR MEDIA</div>
+              <div class="art-tag tag-bottom">N° 001 — INFINITE PLAY</div>
+            </div>
+            <div class="hero-grain"></div>
+          </section>
 
-            <h1>
-              Your world.<br />
-              <span>Your watchlist.</span>
-            </h1>
+          <section class="stats-row" aria-label="Library statistics">
+            <div class="stat-card">
+              <div class="stat-icon purple">▤</div>
+              <div>
+                <span class="stat-value" id="videoCount">0</span
+                ><span class="stat-label">VIDEOS IN LIBRARY</span>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon pink">♡</div>
+              <div>
+                <span class="stat-value" id="favoriteCount">0</span
+                ><span class="stat-label">FAVORITES</span>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon blue">◷</div>
+              <div>
+                <span class="stat-value" id="recentCount">0</span
+                ><span class="stat-label">WATCHED VIDEOS</span>
+              </div>
+            </div>
+          </section>
 
-            <p>
-              Your videos, your folders, your rules. Bring your favorite media
-              sources into one simple library.
+          <section class="home-features">
+            <div class="section-top">
+              <div>
+                <div class="eyebrow section-eyebrow">YOUR MEDIA WORKSPACE</div>
+                <h2>What you can do<span class="heading-period">.</span></h2>
+              </div>
+            </div>
+            <div class="feature-grid">
+              <article class="feature-card">
+                <span class="feature-icon">▦</span>
+                <h3>Organize your library</h3>
+                <p>
+                  Browse your saved videos, sort them, search titles, and use
+                  your folders.
+                </p>
+                <button
+                  class="text-action"
+                  type="button"
+                  data-go-view="library"
+                >
+                  Open library →
+                </button>
+              </article>
+              <article class="feature-card">
+                <span class="feature-icon">▣</span>
+                <h3>Import a Drive folder</h3>
+                <p>
+                  Scan a shared Drive folder and review the videos before adding
+                  them.
+                </p>
+                <button
+                  id="homeImportFolderButton"
+                  class="text-action"
+                  type="button"
+                >
+                  Import folder →
+                </button>
+              </article>
+              <article class="feature-card">
+                <span class="feature-icon">☑</span>
+                <h3>Manage in batches</h3>
+                <p>
+                  Select multiple library items to move them to another folder
+                  or remove them.
+                </p>
+                <button
+                  class="text-action"
+                  type="button"
+                  data-go-view="library"
+                >
+                  Manage videos →
+                </button>
+              </article>
+              <article class="feature-card">
+                <span class="feature-icon">⇧</span>
+                <h3>Back up your library</h3>
+                <p>
+                  Export your current browser library as JSON so you can restore
+                  it later.
+                </p>
+                <button
+                  class="text-action"
+                  type="button"
+                  data-go-view="library"
+                >
+                  Open library tools →
+                </button>
+              </article>
+            </div>
+            <p class="home-note">
+              Your library is currently stored in this browser. Cloud
+              synchronization can be added separately.
             </p>
-
-            <div class="hero-actions">
-              <button
-                id="heroActionButton"
-                class="primary-button hero-button"
-                type="button"
-              >
-                <span>＋</span> Add your first video
-              </button>
-
-              <span class="hero-note">
-                A little corner of the internet, just for you.
-              </span>
-            </div>
-          </div>
-
-          <div class="hero-art" aria-hidden="true">
-            <div class="orbit orbit-one"></div>
-            <div class="orbit orbit-two"></div>
-            <div class="art-glow"></div>
-            <div class="play-emblem">▶</div>
-            <div class="art-tag tag-top">YOUR MEDIA</div>
-            <div class="art-tag tag-bottom">N° 001 — INFINITE PLAY</div>
-          </div>
-
-          <div class="hero-grain"></div>
+          </section>
         </section>
 
-        <!-- LIBRARY STATISTICS -->
-        <section class="stats-row" aria-label="Library statistics">
-          <div class="stat-card">
-            <div class="stat-icon purple">▤</div>
-            <div>
-              <span class="stat-value" id="videoCount">0</span>
-              <span class="stat-label">VIDEOS IN LIBRARY</span>
-            </div>
-          </div>
-
-          <div class="stat-card">
-            <div class="stat-icon pink">♡</div>
-            <div>
-              <span class="stat-value" id="favoriteCount">0</span>
-              <span class="stat-label">FAVORITES</span>
-            </div>
-          </div>
-
-          <div class="stat-card">
-            <div class="stat-icon blue">◷</div>
-            <div>
-              <span class="stat-value" id="recentCount">0</span>
-              <span class="stat-label">WATCHED VIDEOS</span>
-            </div>
-          </div>
-        </section>
-
-        <!-- VIDEO LIBRARY -->
-        <section class="library-section">
+        <!-- LIBRARY: videos only appear here and in its filtered views -->
+        <section id="libraryWorkspace" class="library-section" hidden>
           <div class="section-top">
             <div>
               <div class="eyebrow section-eyebrow">
                 PICK UP WHERE YOU LEFT OFF
               </div>
-
               <h2 id="sectionTitle">
                 Explore your library<span class="heading-period">.</span>
               </h2>
             </div>
-
             <span id="resultCount" class="result-count">0 ITEMS</span>
           </div>
 
-          <!-- LIBRARY MANAGEMENT CONTROLS -->
           <div class="library-toolbar" aria-label="Library tools">
             <div class="library-tools-left">
+              <button
+                id="selectItemsButton"
+                class="secondary-button tool-button"
+                type="button"
+              >
+                ☑ Select items
+              </button>
               <button
                 id="manageFoldersButton"
                 class="secondary-button tool-button"
@@ -203,7 +259,6 @@
               >
                 ▤ Manage folders
               </button>
-
               <button
                 id="exportLibraryButton"
                 class="secondary-button tool-button"
@@ -211,7 +266,6 @@
               >
                 ↓ Export backup
               </button>
-
               <button
                 id="importLibraryButton"
                 class="secondary-button tool-button"
@@ -219,15 +273,13 @@
               >
                 ↑ Import backup
               </button>
-
               <button
                 id="importDriveFolderButton"
-                class="secondary-button tool-button drive-folder-button"
+                class="secondary-button tool-button"
                 type="button"
               >
                 ▣ Import Drive folder
               </button>
-
               <input
                 id="importFileInput"
                 type="file"
@@ -235,11 +287,8 @@
                 hidden
               />
             </div>
-
-            <!-- SORTING -->
             <label class="sort-control" for="sortSelect">
               <span>Sort</span>
-
               <select id="sortSelect" class="form-input sort-select">
                 <option value="smart">Default order</option>
                 <option value="title-asc">Title A–Z</option>
@@ -251,41 +300,123 @@
             </label>
           </div>
 
-          <!-- CATEGORY FILTERS -->
+          <div id="bulkSelectionToolbar" class="bulk-selection-toolbar" hidden>
+            <label class="select-all-label"
+              ><input id="selectAllVisible" type="checkbox" /> Select all
+              visible</label
+            >
+            <span id="selectedCount" class="selected-count">0 selected</span>
+            <label class="bulk-move-label" for="bulkMoveCategory"
+              >Move to</label
+            >
+            <select
+              id="bulkMoveCategory"
+              class="form-input bulk-move-select"
+            ></select>
+            <button
+              id="bulkMoveButton"
+              class="primary-button tool-button"
+              type="button"
+              disabled
+            >
+              Move selected
+            </button>
+            <button
+              id="bulkDeleteButton"
+              class="danger-button tool-button"
+              type="button"
+              disabled
+            >
+              Delete selected
+            </button>
+            <button
+              id="exitSelectionButton"
+              class="secondary-button tool-button"
+              type="button"
+            >
+              Cancel
+            </button>
+          </div>
+
           <div
             id="categoryFilters"
             class="category-filters"
             aria-label="Filter by folder"
           ></div>
-
-          <!-- VIDEO CARDS -->
           <div id="videoGrid" class="video-grid"></div>
 
-          <!-- EMPTY STATE -->
           <div id="emptyState" class="empty-state">
             <div class="empty-icon">▶</div>
-
             <h3 id="emptyTitle">Your library starts here.</h3>
-
             <p id="emptyMessage">
               Add a Google Drive video to create your personal collection.
             </p>
-
             <button id="emptyAddButton" class="primary-button" type="button">
-              ＋ Add a video
+              ＋ Select source
             </button>
           </div>
         </section>
 
-        <!-- FOOTER -->
         <footer class="footer">
-          <span><span class="footer-mark">N✦</span> NYXPLAY</span>
-          <span>YOUR MEDIA. YOUR SPACE.</span>
+          <span><span class="footer-mark">N✦</span> NYXPLAY</span
+          ><span>YOUR MEDIA. YOUR SPACE.</span>
         </footer>
       </main>
     </div>
 
-    <!-- ADD VIDEO DIALOG -->
+    <!-- One source link can be a video or a folder -->
+    <dialog id="sourceDialog" class="app-dialog source-dialog">
+      <form id="sourceForm" class="dialog-content">
+        <div class="dialog-header">
+          <div>
+            <div class="eyebrow">ADD TO YOUR COLLECTION</div>
+            <h2>Select a source<span class="heading-period">.</span></h2>
+          </div>
+          <button
+            type="button"
+            class="icon-button close-button"
+            data-close-dialog="sourceDialog"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+        <p class="dialog-description">
+          Paste a Google Drive file or folder link. NYXPLAY detects the link
+          type and opens the appropriate workflow.
+        </p>
+        <label class="field-label" for="sourceUrl"
+          >Google Drive video or folder link</label
+        >
+        <input
+          class="form-input"
+          id="sourceUrl"
+          type="url"
+          placeholder="https://drive.google.com/file/d/... or /drive/folders/..."
+          required
+        />
+        <p
+          id="sourceStatus"
+          class="folder-import-status"
+          role="status"
+          aria-live="polite"
+        >
+          Paste a link to continue.
+        </p>
+        <div class="dialog-actions">
+          <button
+            type="button"
+            class="secondary-button"
+            data-close-dialog="sourceDialog"
+          >
+            Cancel
+          </button>
+          <button type="submit" class="primary-button">Detect link →</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- ADD VIDEO -->
     <dialog id="addDialog" class="app-dialog">
       <form id="addVideoForm" class="dialog-content">
         <div class="dialog-header">
@@ -293,60 +424,31 @@
             <div class="eyebrow">EXPAND YOUR COLLECTION</div>
             <h2>Add a video<span class="heading-period">.</span></h2>
           </div>
-
           <button
             type="button"
             class="icon-button close-button"
             data-close-dialog="addDialog"
-            aria-label="Close add video dialog"
+            aria-label="Close"
           >
             ✕
           </button>
         </div>
-
         <p class="dialog-description">
-          Add a Google Drive video link and organize it into one of your
-          folders.
+          Add one Google Drive video to your library.
         </p>
-
         <label class="field-label" for="videoTitle">Video title</label>
         <input
           class="form-input"
           id="videoTitle"
-          name="title"
           type="text"
           maxlength="120"
-          placeholder="e.g. My favorite episode"
           required
         />
-
-        <label class="field-label" for="driveUrl">
-          Google Drive sharing link
-        </label>
-        <input
-          class="form-input"
-          id="driveUrl"
-          name="driveUrl"
-          type="url"
-          placeholder="https://drive.google.com/file/d/..."
-          required
-        />
-
-        <p class="field-hint">
-          Use a Google Drive file link, not a folder link.
-        </p>
-
-        <label class="field-label" for="videoCategory"> Choose a folder </label>
-        <select class="form-input" id="videoCategory" name="category">
-          <option>Movies</option>
-          <option>Series</option>
-          <option>Cartoons</option>
-          <option>Anime</option>
-          <option selected>Other</option>
-        </select>
-
+        <label class="field-label" for="driveUrl">Google Drive file link</label>
+        <input class="form-input" id="driveUrl" type="url" required />
+        <label class="field-label" for="videoCategory">Choose a folder</label>
+        <select class="form-input" id="videoCategory"></select>
         <p id="formError" class="form-error" role="alert" hidden></p>
-
         <div class="dialog-actions">
           <button
             type="button"
@@ -355,19 +457,14 @@
           >
             Cancel
           </button>
-
           <button type="submit" class="primary-button">
             Save to library ↗
           </button>
         </div>
-
-        <p class="privacy-note">
-          Your library list is saved in this browser only.
-        </p>
       </form>
     </dialog>
 
-    <!-- EDIT VIDEO DIALOG -->
+    <!-- EDIT VIDEO -->
     <dialog id="editDialog" class="app-dialog">
       <form id="editVideoForm" class="dialog-content">
         <div class="dialog-header">
@@ -375,23 +472,16 @@
             <div class="eyebrow">UPDATE YOUR COLLECTION</div>
             <h2>Edit video<span class="heading-period">.</span></h2>
           </div>
-
           <button
             type="button"
             class="icon-button close-button"
             data-close-dialog="editDialog"
-            aria-label="Close edit video dialog"
+            aria-label="Close"
           >
             ✕
           </button>
         </div>
-
-        <p class="dialog-description">
-          Change the title, Google Drive link, or folder for this video.
-        </p>
-
         <input id="editVideoId" type="hidden" />
-
         <label class="field-label" for="editVideoTitle">Video title</label>
         <input
           class="form-input"
@@ -400,19 +490,13 @@
           maxlength="120"
           required
         />
-
-        <label class="field-label" for="editDriveUrl">
-          Google Drive sharing link
-        </label>
+        <label class="field-label" for="editDriveUrl"
+          >Google Drive file link</label
+        >
         <input class="form-input" id="editDriveUrl" type="url" required />
-
-        <p class="field-hint">Only Google Drive file links are accepted.</p>
-
-        <label class="field-label" for="editVideoCategory"> Folder </label>
+        <label class="field-label" for="editVideoCategory">Folder</label>
         <select class="form-input" id="editVideoCategory"></select>
-
         <p id="editFormError" class="form-error" role="alert" hidden></p>
-
         <div class="dialog-actions">
           <button
             type="button"
@@ -421,36 +505,29 @@
           >
             Cancel
           </button>
-
           <button type="submit" class="primary-button">Save changes ↗</button>
         </div>
       </form>
     </dialog>
 
-    <!-- DELETE VIDEO CONFIRMATION -->
+    <!-- DELETE CONFIRMATION -->
     <dialog id="deleteDialog" class="app-dialog">
       <div class="dialog-content">
         <div class="dialog-header">
           <div>
             <div class="eyebrow">REMOVE FROM YOUR LIBRARY</div>
-            <h2>Delete video<span class="heading-period">.</span></h2>
+            <h2>Delete selection<span class="heading-period">.</span></h2>
           </div>
-
           <button
             type="button"
             class="icon-button close-button"
             data-close-dialog="deleteDialog"
-            aria-label="Close delete confirmation"
+            aria-label="Close"
           >
             ✕
           </button>
         </div>
-
-        <p id="deleteMessage" class="dialog-description">
-          Remove this video from your NYXPLAY library? The original file in
-          Google Drive will not be deleted.
-        </p>
-
+        <p id="deleteMessage" class="dialog-description"></p>
         <div class="dialog-actions">
           <button
             id="cancelDeleteButton"
@@ -459,7 +536,6 @@
           >
             Cancel
           </button>
-
           <button id="confirmDeleteButton" type="button" class="danger-button">
             Delete from library
           </button>
@@ -467,7 +543,7 @@
       </div>
     </dialog>
 
-    <!-- FOLDER MANAGEMENT DIALOG -->
+    <!-- FOLDER MANAGER -->
     <dialog id="folderDialog" class="app-dialog folder-dialog">
       <div class="dialog-content">
         <div class="dialog-header">
@@ -475,55 +551,43 @@
             <div class="eyebrow">ORGANIZE YOUR MEDIA</div>
             <h2>Manage folders<span class="heading-period">.</span></h2>
           </div>
-
           <button
             type="button"
             class="icon-button close-button"
             data-close-dialog="folderDialog"
-            aria-label="Close folder manager"
+            aria-label="Close"
           >
             ✕
           </button>
         </div>
-
         <p class="dialog-description">
-          Create or rename folders. Deleting a custom folder moves its videos to
-          Other; Google Drive files are never deleted.
+          Create, rename, or delete custom folders. Deleting a folder moves its
+          videos to Other.
         </p>
-
         <form id="createFolderForm" class="create-folder-form">
-          <label class="field-label" for="newFolderName">
-            New folder name
-          </label>
-
+          <label class="field-label" for="newFolderName">New folder name</label>
           <div class="inline-form-row">
             <input
               class="form-input"
               id="newFolderName"
               type="text"
-              maxlength="30"
+              maxlength="65"
               placeholder="e.g. Documentaries"
               required
             />
-
             <button class="primary-button" type="submit">＋ Create</button>
           </div>
-
           <p id="folderFormError" class="form-error" role="alert" hidden></p>
         </form>
-
         <div class="folder-list-heading">
-          <span class="field-label">YOUR FOLDERS</span>
-          <span id="folderCountLabel" class="result-count"></span>
+          <span class="field-label">YOUR FOLDERS</span
+          ><span id="folderCountLabel" class="result-count"></span>
         </div>
-
         <div id="folderManagerList" class="folder-manager-list"></div>
-
-        <p class="privacy-note">Folder changes are saved in this browser.</p>
       </div>
     </dialog>
 
-    <!-- IMPORT DRIVE FOLDER DIALOG -->
+    <!-- DRIVE FOLDER IMPORTER -->
     <dialog id="folderImportDialog" class="app-dialog folder-import-dialog">
       <div class="dialog-content">
         <div class="dialog-header">
@@ -531,68 +595,48 @@
             <div class="eyebrow">BULK IMPORT</div>
             <h2>Import Drive folder<span class="heading-period">.</span></h2>
           </div>
-
           <button
             type="button"
             class="icon-button close-button"
             data-close-dialog="folderImportDialog"
-            aria-label="Close Drive folder importer"
+            aria-label="Close"
           >
             ✕
           </button>
         </div>
-
         <p class="dialog-description">
-          List videos from a publicly shared Google Drive folder and add them to
-          your NYXPLAY library. This does not download or copy video files.
+          Scan a publicly accessible Drive folder and review the video paths
+          before importing.
         </p>
-
-        <label class="field-label" for="driveFolderUrl">
-          Google Drive folder link
-        </label>
-        <input
-          class="form-input"
-          id="driveFolderUrl"
-          type="url"
-          placeholder="https://drive.google.com/drive/folders/..."
-          autocomplete="url"
-        />
-
-        <label class="field-label" for="driveApiKey">
-          Restricted Google Drive API key
-        </label>
+        <label class="field-label" for="driveFolderUrl"
+          >Google Drive folder link</label
+        >
+        <input class="form-input" id="driveFolderUrl" type="url" required />
+        <label class="field-label" for="driveApiKey"
+          >Restricted Google Drive API key</label
+        >
         <input
           class="form-input"
           id="driveApiKey"
           type="password"
-          placeholder="Paste your API key for this scan"
           autocomplete="off"
           spellcheck="false"
         />
-
         <p class="field-hint">
-          The key is used for the scan and is not saved in NYXPLAY or exported
-          in backups. Keep its Google Cloud website and API restrictions
-          enabled.
+          The key is used for this scan only. It is not saved in the library.
         </p>
-
         <label class="check-row folder-name-option" for="createMatchingFolder">
           <input id="createMatchingFolder" type="checkbox" checked />
-          <span>
-            Create/use a NYXPLAY folder matching the Drive folder's name
-          </span>
+          <span>Preserve the Drive folder groups in NYXPLAY</span>
         </label>
-
-        <label class="field-label" for="folderImportCategory">
-          Or choose an existing destination folder
-        </label>
+        <label class="field-label" for="folderImportCategory"
+          >If folder grouping is disabled, use this destination</label
+        >
         <select class="form-input" id="folderImportCategory" disabled></select>
-
         <label class="check-row" for="scanNestedFolders">
           <input id="scanNestedFolders" type="checkbox" checked />
           <span>Include videos inside subfolders</span>
         </label>
-
         <div class="dialog-actions scan-actions">
           <button
             id="scanDriveFolderButton"
@@ -602,24 +646,20 @@
             Scan folder
           </button>
         </div>
-
         <p
           id="folderImportStatus"
           class="folder-import-status"
           role="status"
           aria-live="polite"
         >
-          Paste a folder link and API key, then scan.
+          Paste the folder link and API key, then scan.
         </p>
-
         <div id="folderImportPreview" class="drive-import-preview" hidden>
           <div class="folder-list-heading">
-            <span class="field-label">SCAN RESULTS</span>
-            <span id="folderImportCount" class="result-count"></span>
+            <span class="field-label">SCAN RESULTS</span
+            ><span id="folderImportCount" class="result-count"></span>
           </div>
-
           <ul id="folderImportList" class="drive-import-list"></ul>
-
           <div class="dialog-actions">
             <button
               id="cancelFolderImportButton"
@@ -628,7 +668,6 @@
             >
               Cancel
             </button>
-
             <button
               id="importScannedVideosButton"
               type="button"
@@ -639,16 +678,10 @@
             </button>
           </div>
         </div>
-
-        <p class="privacy-note">
-          Only videos accessible to the public-folder API request can be
-          imported. Private folders require Google authorization, which is not
-          included in this first version.
-        </p>
       </div>
     </dialog>
 
-    <!-- GOOGLE DRIVE VIDEO PLAYER -->
+    <!-- GOOGLE DRIVE PLAYER -->
     <dialog id="playerDialog" class="player-dialog">
       <div class="player-content">
         <div class="player-header">
@@ -657,17 +690,15 @@
             <h2 id="playerTitle">Video title</h2>
             <p id="playerCategory">Google Drive</p>
           </div>
-
           <button
             id="closePlayerButton"
             class="icon-button close-button"
             type="button"
-            aria-label="Close video player"
+            aria-label="Close player"
           >
             ✕
           </button>
         </div>
-
         <div class="video-frame-wrap">
           <iframe
             id="videoFrame"
@@ -676,35 +707,27 @@
             allow="autoplay; encrypted-media; picture-in-picture"
             allowfullscreen
             referrerpolicy="strict-origin-when-cross-origin"
-          >
-          </iframe>
+          ></iframe>
         </div>
-
         <div class="player-controls">
           <div class="player-notice">
-            <span class="status-dot"></span>
-            Playback provided by Google Drive
+            <span class="status-dot"></span> Playback provided by Google Drive
           </div>
-
           <div class="player-buttons">
             <button id="openDriveButton" class="secondary-button" type="button">
               Open in Drive ↗
             </button>
-
             <button id="nextVideoButton" class="primary-button" type="button">
               Next video →
             </button>
           </div>
         </div>
-
         <p class="player-help">
-          If playback is blocked, check the video's Drive sharing permissions
-          and make sure you are signed into an authorized Google account.
+          Playback depends on Drive sharing permissions and browser support.
         </p>
       </div>
     </dialog>
 
-    <!-- ACCESSIBLE NOTIFICATION -->
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </body>
 </html>
